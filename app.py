@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+# Initialize FastAPI app
 app = FastAPI()
 
 class JD(BaseModel):
@@ -10,12 +12,16 @@ class JD(BaseModel):
 class Resume(BaseModel):
     file_path: str
 
+def get_db():
+    # Logic to initialize and return a database session
+    pass
+
 @app.post("/upload_jd/")
-async def upload_jd(jd: JD):
+async def upload_jd(jd: JD, db: Session = Depends(get_db)):
     # Logic to save JD in the database
-    return {"message": "JD uploaded successfully"}
+    pass
 
 @app.post("/upload_resume/")
-async def upload_resume(resume: Resume):
+async def upload_resume(resume: Resume, db: Session = Depends(get_db)):
     # Logic to parse resume and save details in the database
-    return {"message": "Resume uploaded and parsed successfully"}
+    pass
