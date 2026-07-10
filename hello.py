@@ -29,5 +29,11 @@ def create_database():
     conn.commit()
     conn.close()
 
+def calculate_similarity(text1, text2):
+    embeddings1 = model.encode([text1])
+    embeddings2 = model.encode([text2])
+    similarity = cosine_similarity(embeddings1, embeddings2)[0][0]
+    return similarity
+
 if __name__ == '__main__':
     create_database()
