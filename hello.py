@@ -1,4 +1,22 @@
 import sqlite3
+from pypdf import PdfReader
+from docx import Document
+from sentence_transformers import SentenceTransformer
+
+# Initialize Sentence Transformer model
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def extract_text_from_pdf(file_path):
+    reader = PdfReader(file_path)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+def extract_text_from_docx(file_path):
+    doc = Document(file_path)
+    text = "\n".join([para.text for para in doc.paragraphs])
+    return text
 
 def create_database():
     conn = sqlite3.connect('recruiter_workflow.db')
