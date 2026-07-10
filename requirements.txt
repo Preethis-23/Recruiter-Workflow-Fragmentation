@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlalchemy
+pypdf
+python-docx
+sentence-transformers
+sklearn
+openai
