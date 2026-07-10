@@ -38,6 +38,7 @@ class RecruitmentStage(Base):
     date = Column(String, index=True)
     notes = Column(String, index=True)
 
-engine = create_engine(config.DATABASE_URL)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./recruiter_workflow.db")
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base.metadata.create_all(bind=engine)
