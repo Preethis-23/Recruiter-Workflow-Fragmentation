@@ -2,6 +2,7 @@ import sqlite3
 from pypdf import PdfReader
 from docx import Document
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Initialize Sentence Transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
