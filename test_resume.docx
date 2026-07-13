@@ -1,0 +1,27 @@
+John Smith
+john.smith@email.com
++1-555-123-4567
+
+Education
+B.S. Computer Science, MIT, 2018
+
+Experience
+Senior Software Engineer at TechCorp (2020-Present)
+- Built RESTful APIs using Python, FastAPI, and SQLAlchemy
+- Deployed microservices with Docker and Kubernetes on AWS
+- Led a team of 5 engineers, mentored junior developers
+- Implemented CI/CD pipelines using GitHub Actions
+
+Software Engineer at StartupX (2018-2020)
+- Developed backend services in Python and Django
+- Managed PostgreSQL databases with complex queries
+- Built real-time data pipelines using Redis and Celery
+
+Skills
+Python, FastAPI, Django, SQLAlchemy, Docker, Kubernetes, AWS, PostgreSQL, Redis, Git, CI/CD, REST APIs
+
+Projects
+Open-source FastAPI template with authentication and role-based access control (500+ GitHub stars)
+
+Certifications
+AWS Solutions Architect Associate

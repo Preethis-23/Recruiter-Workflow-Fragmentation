@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recruiter AI Workspace</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css?v=1.1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar glass-panel">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-robot"></i>
+                    <span>RecruitAI</span>
+                </div>
+            </div>
+            
+            <ul class="nav-links">
+                <li class="active" data-view="dashboard">
+                    <i class="fa-solid fa-briefcase"></i>
+                    <span>Job Descriptions</span>
+                </li>
+                <li data-view="resumes">
+                    <i class="fa-solid fa-file-pdf"></i>
+                    <span>Resumes</span>
+                </li>
+                <li data-view="candidates">
+                    <i class="fa-solid fa-users"></i>
+                    <span>Candidates</span>
+                </li>
+                <li data-view="agent">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span>Agent Console</span>
+                </li>
+            </ul>
+
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="dot"></span>
+                    <span id="api-status">Connecting...</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Dashboard View -->
+            <section id="view-dashboard" class="view-section active">
+                <header class="section-header">
+                    <h1>Job Descriptions</h1>
+                    <button class="btn btn-primary" onclick="showCreateJDModal()">
+                        <i class="fa-solid fa-plus"></i> New JD
+                    </button>
+                </header>
+                <div class="grid-container" id="jd-grid">
+                    <!-- Dynamic JD Cards will appear here -->
+                    <div class="loading-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i> Loading...</div>
+                </div>
+            </section>
+
+            <!-- Resumes View -->
+            <section id="view-resumes" class="view-section">
+                <header class="section-header">
+                    <h1>Resume Repository</h1>
+                </header>
+                
+                <div class="upload-zone glass-panel" id="upload-zone">
+                    <i class="fa-solid fa-cloud-arrow-up fa-3x"></i>
+                    <h3>Drag & Drop Resumes</h3>
+                    <p>Supported formats: PDF, DOCX (max 5MB)</p>
+                    <div style="margin: 15px 0;">
+                        <label for="upload-jd-select" style="display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9rem;">Assign to Target Role:</label>
+                        <select id="upload-jd-select" class="glass-input" style="max-width: 300px; margin: 0 auto; display: block;">
+                            <option value="">General Pool (No Role)</option>
+                        </select>
+                    </div>
+                    <input type="file" id="resume-upload-input" accept=".pdf,.docx" multiple hidden>
+                    <button class="btn btn-secondary" onclick="document.getElementById('resume-upload-input').click()">Browse Files</button>
+                    <p id="upload-status" class="mt-2" style="font-size: 0.875rem; color: var(--text-muted);"></p>
+                </div>
+
+                <div class="list-container glass-panel mt-4">
+                    <h3>Recent Uploads</h3>
+                    <table class="data-table" id="resumes-table">
+                        <thead>
+                            <tr>
+                                <th>Candidate Name</th>
+                                <th>Email</th>
+                                <th>Target Role(s)</th>
+                                <th>Uploaded On</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Dynamic Rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Candidates View -->
+            <section id="view-candidates" class="view-section">
+                <header class="section-header">
+                    <h1>Candidate Pipeline</h1>
+                    <div class="header-actions">
+                        <select id="jd-filter-select" class="glass-input">
+                            <option value="">All Job Descriptions</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="triggerRanking()">
+                            <i class="fa-solid fa-ranking-star"></i> Rank Candidates
+                        </button>
+                    </div>
+                </header>
+                
+                <div class="list-container glass-panel">
+                    <table class="data-table" id="candidates-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th>AI Score</th>
+                                <th>Pipeline Stage</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Dynamic Rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Agent Console View -->
+            <section id="view-agent" class="view-section">
+                <header class="section-header">
+                    <h1>AI Agent Console</h1>
+                    <p class="subtitle">Automate your recruitment workflow with natural language.</p>
+                </header>
+                
+                <div class="agent-container glass-panel">
+                    <div class="chat-history" id="chat-history">
+                        <div class="message system">
+                            <div class="message-content">
+                                👋 Hi! I'm your AI Recruitment Agent. How can I help you today?
+                                <br><br>
+                                Try asking me to:
+                                <ul>
+                                    <li>"List all job descriptions"</li>
+                                    <li>"Rank candidates for job description #1"</li>
+                                    <li>"Generate an interview email for candidate #3"</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="chat-input-area">
+                        <input type="text" id="agent-input" class="glass-input" placeholder="Type an instruction (e.g., 'Rank resumes against JD #1')..." autocomplete="off">
+                        <button class="btn btn-primary btn-icon" onclick="sendAgentMessage()">
+                            <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+            
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="jd-modal" class="modal-overlay">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Create Job Description</h2>
+                <button class="icon-btn close-modal" onclick="closeModals()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="create-jd-form" class="modal-body">
+                <div class="form-group">
+                    <label>Job Title</label>
+                    <input type="text" id="jd-title" class="glass-input" required>
+                </div>
+                <div class="form-group">
+                    <label>Department</label>
+                    <input type="text" id="jd-dept" class="glass-input">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="jd-desc" class="glass-input" rows="4" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Required Skills (comma separated)</label>
+                    <input type="text" id="jd-skills" class="glass-input">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModals()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create JD</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="candidate-modal" class="modal-overlay">
+        <div class="modal-content glass-panel wide-modal">
+            <div class="modal-header">
+                <h2 id="candidate-modal-title">Candidate Profile</h2>
+                <button class="icon-btn close-modal" onclick="closeModals()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body candidate-details">
+                <div class="ai-summary-box glass-panel-inner mb-4">
+                    <h3><i class="fa-solid fa-sparkles text-primary"></i> AI Summary</h3>
+                    <p id="candidate-summary">Generate a summary to see the AI analysis.</p>
+                    <button class="btn btn-sm btn-outline mt-2" id="btn-gen-summary">Generate AI Summary</button>
+                </div>
+                
+                <div class="ai-questions-box glass-panel-inner mb-4">
+                    <h3><i class="fa-solid fa-clipboard-question text-primary"></i> Interview Questions</h3>
+                    <ul id="candidate-questions" class="question-list">
+                        <!-- Questions here -->
+                    </ul>
+                    <button class="btn btn-sm btn-outline mt-2" id="btn-gen-questions">Generate Questions</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=1.1"></script>
+</body>
+</html>

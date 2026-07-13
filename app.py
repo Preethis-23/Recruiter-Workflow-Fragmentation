@@ -1,27 +1,17 @@
-from fastapi import FastAPI, Depends
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+"""Entry point for the Recruiter Workflow Fragmentation API.
 
-# Initialize FastAPI app
-app = FastAPI()
+Run with::
 
-class JD(BaseModel):
-    title: str
-    description: str
+    uvicorn app:app --reload
+"""
 
-class Resume(BaseModel):
-    file_path: str
+import uvicorn
+from recruiter_workflow.main import app
 
-def get_db():
-    # Logic to initialize and return a database session
-    pass
-
-@app.post("/upload_jd/")
-async def upload_jd(jd: JD, db: Session = Depends(get_db)):
-    # Logic to save JD in the database
-    pass
-
-@app.post("/upload_resume/")
-async def upload_resume(resume: Resume, db: Session = Depends(get_db)):
-    # Logic to parse resume and save details in the database
-    pass
+if __name__ == "__main__":
+    uvicorn.run(
+        "recruiter_workflow.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+    )

@@ -1,5 +1,26 @@
-.aider*
+# Python
 venv/
 .env
 __pycache__/
 *.pyc
+
+# Aider
+.aider*
+
+# Database
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+
+# Misc
+.sixth/
+uploads/
