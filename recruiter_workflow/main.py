@@ -31,6 +31,7 @@ from recruiter_workflow.routers import (
     email_router,
     interview_router,
     agent_router,
+    meeting_router,
 )
 
 description = (
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(stage_router.router)
     app.include_router(email_router.router)
     app.include_router(interview_router.router)
+    app.include_router(meeting_router.router)
 
     # Health check
     @app.get("/health", tags=["Health"])

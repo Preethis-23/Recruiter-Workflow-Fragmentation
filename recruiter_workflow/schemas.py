@@ -144,6 +144,40 @@ class EmailResponse(BaseModel):
     body: str
 
 
+# ─── Meeting ──────────────────────────────────────────────────────────────────
+
+class MeetingCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    meeting_link: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = Field(30, ge=5, le=480)
+    attendees: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MeetingUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    meeting_link: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = Field(None, ge=5, le=480)
+    attendees: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MeetingResponse(BaseModel):
+    id: int
+    candidate_id: int
+    title: str
+    meeting_link: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+    duration_minutes: Optional[int] = None
+    attendees: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 # ─── Ranking ──────────────────────────────────────────────────────────────────
 
 class RankedCandidateResponse(BaseModel):

@@ -412,20 +412,37 @@ function closeModals() {
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
 }
 
+// Currently viewed candidate ID (used across sections)
+let currentCandidateId = null;
+
 async function viewCandidate(id) {
+    currentCandidateId = id;
     document.getElementById('candidate-modal').classList.add('active');
     document.getElementById('candidate-modal-title').textContent = 'Candidate #' + id;
+    
+    // Reset sections
+    document.getElementById('candidate-summary').textContent = 'No AI summary generated yet.';
+    document.getElementById('candidate-questions').innerHTML = '';
+    document.getElementById('email-preview').style.display = 'none';
     
     try {
         const res = await fetch(API_BASE + '/candidates/' + id);
         const data = await res.json();
         
+        const name = data.resume ? (data.resume.candidate_name || 'Unknown') : 'Unknown';
+        document.getElementById('candidate-modal-title').textContent = escapeHtml(name);
         document.getElementById('candidate-summary').textContent = data.summary || 'No AI summary generated yet.';
-        document.getElementById('candidate-questions').innerHTML = '';
     } catch (e) {
         document.getElementById('candidate-summary').textContent = 'Failed to load candidate.';
     }
     
+    // Load pipeline stages
+    loadPipeline(id);
+    
+    // Load meetings
+    loadMeetings(id);
+    
+    // Wire AI buttons
     document.getElementById('btn-gen-summary').onclick = async () => {
         document.getElementById('candidate-summary').textContent = 'Generating summary via LLM...';
         try {
@@ -457,6 +474,263 @@ async function viewCandidate(id) {
             document.getElementById('candidate-questions').innerHTML = '<li>Error generating questions.</li>';
         }
     };
+}
+
+// ─── Pipeline Stepper ───────────────────────────────────────────────────────
+const PIPELINE_STAGES = [
+    'Screening', 'Phone Interview', 'Technical Interview', 'HR Interview',
+    'Assignment', 'Final Round', 'Offer', 'Hired'
+];
+
+async function loadPipeline(candidateId) {
+    const stepper = document.getElementById('pipeline-stepper');
+    stepper.innerHTML = '';
+    
+    let completedStages = [];
+    try {
+        const res = await fetch(API_BASE + '/stages/candidate/' + candidateId);
+        const stages = await res.json();
+        completedStages = stages.map(s => s.stage);
+    } catch (e) {
+        console.error('Failed to load pipeline', e);
+    }
+    
+    const isRejected = completedStages.includes('Rejected');
+    const lastCompleted = completedStages.length > 0 ? completedStages[completedStages.length - 1] : null;
+    
+    PIPELINE_STAGES.forEach((stage, idx) => {
+        const div = document.createElement('div');
+        div.className = 'pipeline-step';
+        
+        const isCompleted = completedStages.includes(stage);
+        const isActive = (lastCompleted === stage && !isRejected);
+        
+        if (isCompleted) div.classList.add('completed');
+        if (isActive) div.classList.add('active');
+        if (isRejected && stage === lastCompleted) div.classList.add('rejected');
+        
+        div.innerHTML = `
+            <div class="step-connector"></div>
+            <div class="step-dot">${isCompleted ? '<i class="fa-solid fa-check" style="font-size:0.6rem;color:white;"></i>' : (idx + 1)}</div>
+            <span class="step-label">${stage}</span>
+        `;
+        stepper.appendChild(div);
+    });
+    
+    if (isRejected) {
+        const rejDiv = document.createElement('div');
+        rejDiv.className = 'pipeline-step rejected';
+        rejDiv.innerHTML = `
+            <div class="step-connector"></div>
+            <div class="step-dot"><i class="fa-solid fa-xmark" style="font-size:0.6rem;color:white;"></i></div>
+            <span class="step-label">Rejected</span>
+        `;
+        stepper.appendChild(rejDiv);
+    }
+}
+
+async function advanceStage() {
+    if (!currentCandidateId) return;
+    const stage = document.getElementById('advance-stage-select').value;
+    if (!stage) { alert('Select a stage first.'); return; }
+    
+    const dateVal = document.getElementById('advance-stage-date').value;
+    const payload = { stage: stage };
+    if (dateVal) payload.scheduled_date = new Date(dateVal).toISOString();
+    
+    try {
+        const res = await fetch(API_BASE + '/stages/candidate/' + currentCandidateId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            loadPipeline(currentCandidateId);
+            document.getElementById('advance-stage-select').value = '';
+            document.getElementById('advance-stage-date').value = '';
+        } else {
+            const err = await res.json();
+            alert('Error: ' + (err.detail || 'Could not advance stage'));
+        }
+    } catch (e) {
+        alert('Network error advancing stage.');
+        console.error(e);
+    }
+}
+
+// ─── Email Generation ───────────────────────────────────────────────────────
+async function generateEmail() {
+    if (!currentCandidateId) return;
+    const templateType = document.getElementById('email-template-select').value;
+    
+    try {
+        const res = await fetch(API_BASE + '/email/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ candidate_id: currentCandidateId, template_type: templateType })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            document.getElementById('email-subject').textContent = 'Subject: ' + data.subject;
+            document.getElementById('email-body').textContent = data.body;
+            document.getElementById('email-preview').style.display = 'block';
+        } else {
+            alert('Error: ' + (data.detail || 'Failed to generate email'));
+        }
+    } catch (e) {
+        alert('Network error generating email.');
+        console.error(e);
+    }
+}
+
+function copyEmail() {
+    const subject = document.getElementById('email-subject').textContent;
+    const body = document.getElementById('email-body').textContent;
+    const full = subject + '\n\n' + body;
+    navigator.clipboard.writeText(full).then(() => {
+        alert('Email copied to clipboard!');
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = full;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('Email copied to clipboard!');
+    });
+}
+
+// ─── Meeting Scheduling ────────────────────────────────────────────────────
+async function loadMeetings(candidateId) {
+    const container = document.getElementById('meetings-list');
+    container.innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</p>';
+    
+    try {
+        const res = await fetch(API_BASE + '/meetings/candidate/' + candidateId);
+        const meetings = await res.json();
+        
+        if (meetings.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-muted); font-size: 0.9rem;">No meetings scheduled yet.</p>';
+            return;
+        }
+        
+        container.innerHTML = '';
+        meetings.forEach(m => {
+            const dateStr = m.scheduled_at ? new Date(m.scheduled_at).toLocaleString() : 'TBD';
+            const durStr = m.duration_minutes ? m.duration_minutes + ' min' : '';
+            
+            const card = document.createElement('div');
+            card.className = 'meeting-card';
+            card.innerHTML = `
+                <div class="meeting-info">
+                    <span class="meeting-title-text">${escapeHtml(m.title)}</span>
+                    <span class="meeting-meta"><i class="fa-regular fa-clock"></i> ${dateStr} ${durStr ? '&middot; ' + durStr : ''}</span>
+                    ${m.attendees ? '<span class="meeting-meta"><i class="fa-regular fa-user"></i> ' + escapeHtml(m.attendees) + '</span>' : ''}
+                </div>
+                <div class="meeting-actions">
+                    ${m.meeting_link ? '<a href="' + escapeHtml(m.meeting_link) + '" target="_blank" class="meeting-link-btn"><i class="fa-solid fa-video"></i> Join</a>' : ''}
+                    <button class="icon-btn" onclick="deleteMeeting(${m.id})"><i class="fa-solid fa-trash" style="color: var(--danger); font-size: 0.8rem;"></i></button>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    } catch (e) {
+        container.innerHTML = '<p style="color: var(--danger); font-size: 0.9rem;">Failed to load meetings.</p>';
+        console.error(e);
+    }
+}
+
+async function scheduleMeeting() {
+    if (!currentCandidateId) return;
+    
+    const title = document.getElementById('meeting-title').value.trim();
+    if (!title) { alert('Meeting title is required.'); return; }
+    
+    const payload = {
+        title: title,
+        meeting_link: document.getElementById('meeting-link').value.trim() || null,
+        duration_minutes: parseInt(document.getElementById('meeting-duration').value) || 30,
+        attendees: document.getElementById('meeting-attendees').value.trim() || null,
+        notes: document.getElementById('meeting-notes').value.trim() || null,
+    };
+    
+    const dateVal = document.getElementById('meeting-datetime').value;
+    if (dateVal) payload.scheduled_at = new Date(dateVal).toISOString();
+    
+    try {
+        const res = await fetch(API_BASE + '/meetings/candidate/' + currentCandidateId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (res.ok) {
+            // Clear form
+            document.getElementById('meeting-title').value = '';
+            document.getElementById('meeting-link').value = '';
+            document.getElementById('meeting-datetime').value = '';
+            document.getElementById('meeting-duration').value = '30';
+            document.getElementById('meeting-attendees').value = '';
+            document.getElementById('meeting-notes').value = '';
+            
+            loadMeetings(currentCandidateId);
+        } else {
+            const err = await res.json();
+            alert('Error: ' + (err.detail || 'Failed to schedule meeting'));
+        }
+    } catch (e) {
+        alert('Network error scheduling meeting.');
+        console.error(e);
+    }
+}
+
+async function deleteMeeting(meetingId) {
+    if (!confirm('Delete this meeting?')) return;
+    try {
+        await fetch(API_BASE + '/meetings/' + meetingId, { method: 'DELETE' });
+        if (currentCandidateId) loadMeetings(currentCandidateId);
+    } catch (e) {
+        alert('Failed to delete meeting.');
+    }
+}
+
+// ─── Full Pipeline Automation ───────────────────────────────────────────────
+async function runFullPipeline() {
+    const jdId = jdFilterSelect.value;
+    if (!jdId) {
+        alert('Select a Job Description from the dropdown first to run the full pipeline.');
+        return;
+    }
+    
+    const btn = document.querySelector('[onclick="runFullPipeline()"]');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Running Pipeline...';
+    
+    try {
+        const res = await fetch(API_BASE + '/agent/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                instruction: 'Run the full recruitment pipeline for job description #' + jdId + '. Rank all candidates, generate a summary for the top candidate, and generate interview questions for the top candidate.'
+            })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            alert('Full pipeline completed! ' + (data.summary || ''));
+        } else {
+            alert('Pipeline error: ' + (data.detail || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Network error running pipeline.');
+        console.error(e);
+    }
+    
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Run Full Pipeline';
+    loadCandidates();
 }
 
 // ─── AI Agent Console ───────────────────────────────────────────────────────
@@ -539,11 +813,7 @@ function appendSystemMessage(html, isRaw) {
     msgEl.className = 'message system';
     const contentEl = document.createElement('div');
     contentEl.className = 'message-content';
-    if (isRaw) {
-        contentEl.innerHTML = html;
-    } else {
-        contentEl.innerHTML = html;
-    }
+    contentEl.innerHTML = html;
     msgEl.appendChild(contentEl);
     chatHistory.appendChild(msgEl);
     chatHistory.scrollTo(0, chatHistory.scrollHeight);

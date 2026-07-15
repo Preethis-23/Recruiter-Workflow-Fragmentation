@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Recruiter AI Workspace</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css?v=1.1">
+    <link rel="stylesheet" href="/style.css?v=2.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -114,6 +114,9 @@
                         <button class="btn btn-primary" onclick="triggerRanking()">
                             <i class="fa-solid fa-ranking-star"></i> Rank Candidates
                         </button>
+                        <button class="btn btn-secondary" onclick="runFullPipeline()">
+                            <i class="fa-solid fa-rocket"></i> Run Full Pipeline
+                        </button>
                     </div>
                 </header>
                 
@@ -208,24 +211,93 @@
                 <h2 id="candidate-modal-title">Candidate Profile</h2>
                 <button class="icon-btn close-modal" onclick="closeModals()"><i class="fa-solid fa-xmark"></i></button>
             </div>
-            <div class="modal-body candidate-details">
+            <div class="modal-body candidate-details" style="max-height: 75vh; overflow-y: auto;">
+                
+                <!-- Pipeline Stepper -->
+                <div class="pipeline-section glass-panel-inner mb-4">
+                    <h3><i class="fa-solid fa-diagram-project text-primary"></i> Recruitment Pipeline</h3>
+                    <div id="pipeline-stepper" class="pipeline-stepper">
+                        <!-- JS rendered -->
+                    </div>
+                    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+                        <select id="advance-stage-select" class="glass-input" style="flex: 1; min-width: 160px;">
+                            <option value="">Select Stage...</option>
+                            <option value="Screening">Screening</option>
+                            <option value="Phone Interview">Phone Interview</option>
+                            <option value="Technical Interview">Technical Interview</option>
+                            <option value="HR Interview">HR Interview</option>
+                            <option value="Assignment">Assignment</option>
+                            <option value="Final Round">Final Round</option>
+                            <option value="Offer">Offer</option>
+                            <option value="Hired">Hired</option>
+                            <option value="Rejected">Rejected</option>
+                        </select>
+                        <input type="datetime-local" id="advance-stage-date" class="glass-input" style="flex: 1; min-width: 160px;">
+                        <button class="btn btn-primary btn-sm" onclick="advanceStage()"><i class="fa-solid fa-forward-step"></i> Advance</button>
+                    </div>
+                </div>
+
+                <!-- AI Summary -->
                 <div class="ai-summary-box glass-panel-inner mb-4">
                     <h3><i class="fa-solid fa-sparkles text-primary"></i> AI Summary</h3>
                     <p id="candidate-summary">Generate a summary to see the AI analysis.</p>
                     <button class="btn btn-sm btn-outline mt-2" id="btn-gen-summary">Generate AI Summary</button>
                 </div>
                 
+                <!-- Interview Questions -->
                 <div class="ai-questions-box glass-panel-inner mb-4">
                     <h3><i class="fa-solid fa-clipboard-question text-primary"></i> Interview Questions</h3>
-                    <ul id="candidate-questions" class="question-list">
-                        <!-- Questions here -->
-                    </ul>
+                    <ul id="candidate-questions" class="question-list"></ul>
                     <button class="btn btn-sm btn-outline mt-2" id="btn-gen-questions">Generate Questions</button>
                 </div>
+
+                <!-- Email Generation -->
+                <div class="email-section glass-panel-inner mb-4">
+                    <h3><i class="fa-solid fa-envelope text-primary"></i> Email Drafting</h3>
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <select id="email-template-select" class="glass-input" style="flex: 1;">
+                            <option value="interview_scheduling">Interview Scheduling</option>
+                            <option value="offer">Offer Letter</option>
+                            <option value="rejection">Rejection</option>
+                            <option value="follow_up">Follow-up</option>
+                        </select>
+                        <button class="btn btn-primary btn-sm" onclick="generateEmail()"><i class="fa-solid fa-wand-magic-sparkles"></i> Draft</button>
+                    </div>
+                    <div id="email-preview" style="display: none;">
+                        <div class="email-preview-box">
+                            <div class="email-subject" id="email-subject"></div>
+                            <pre class="email-body" id="email-body"></pre>
+                        </div>
+                        <button class="btn btn-sm btn-outline mt-2" onclick="copyEmail()"><i class="fa-solid fa-copy"></i> Copy to Clipboard</button>
+                    </div>
+                </div>
+
+                <!-- Meetings -->
+                <div class="meeting-section glass-panel-inner mb-4">
+                    <h3><i class="fa-solid fa-video text-primary"></i> Scheduled Meetings</h3>
+                    <div id="meetings-list" class="meetings-list">
+                        <p style="color: var(--text-muted); font-size: 0.9rem;">No meetings scheduled yet.</p>
+                    </div>
+                    <details class="mt-2">
+                        <summary class="btn btn-sm btn-outline" style="cursor: pointer;"><i class="fa-solid fa-plus"></i> Schedule Meeting</summary>
+                        <div class="meeting-form" style="margin-top: 12px;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                <input type="text" id="meeting-title" class="glass-input" placeholder="Meeting Title" required>
+                                <input type="url" id="meeting-link" class="glass-input" placeholder="Google Meet / Zoom Link">
+                                <input type="datetime-local" id="meeting-datetime" class="glass-input">
+                                <input type="number" id="meeting-duration" class="glass-input" placeholder="Duration (min)" value="30" min="5" max="480">
+                                <input type="text" id="meeting-attendees" class="glass-input" placeholder="Attendees (comma-separated emails)" style="grid-column: span 2;">
+                                <textarea id="meeting-notes" class="glass-input" placeholder="Notes" rows="2" style="grid-column: span 2;"></textarea>
+                            </div>
+                            <button class="btn btn-primary btn-sm mt-2" onclick="scheduleMeeting()"><i class="fa-solid fa-calendar-plus"></i> Save Meeting</button>
+                        </div>
+                    </details>
+                </div>
+
             </div>
         </div>
     </div>
 
-    <script src="app.js?v=1.1"></script>
+    <script src="app.js?v=2.0"></script>
 </body>
 </html>
