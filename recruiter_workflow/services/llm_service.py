@@ -89,7 +89,10 @@ def _call_openai(
     
     try:
         import openai
-        client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+        client_kwargs = {"api_key": settings.OPENAI_API_KEY}
+        if settings.OPENAI_BASE_URL:
+            client_kwargs["base_url"] = settings.OPENAI_BASE_URL
+        client = openai.OpenAI(**client_kwargs)
         
         response = client.chat.completions.create(
             model=settings.OPENAI_MODEL,
@@ -177,7 +180,10 @@ def _call_openai_with_tools(
     
     try:
         import openai
-        client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+        client_kwargs = {"api_key": settings.OPENAI_API_KEY}
+        if settings.OPENAI_BASE_URL:
+            client_kwargs["base_url"] = settings.OPENAI_BASE_URL
+        client = openai.OpenAI(**client_kwargs)
         
         # Convert tools to OpenAI format
         openai_tools = []

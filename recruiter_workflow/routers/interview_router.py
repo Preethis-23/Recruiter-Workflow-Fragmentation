@@ -37,4 +37,7 @@ def get_interview_questions(candidate_id: int, db: Session = Depends(get_db)):
         count=5,
     )
 
+    candidate.interview_questions = "\n".join(questions)
+    db.commit()
+
     return InterviewQuestionResponse(questions=questions)

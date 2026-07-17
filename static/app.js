@@ -97,14 +97,9 @@ navLinks.forEach(link => {
         document.getElementById(`view-${targetView}`).classList.add('active');
         
         if (targetView === 'dashboard') loadJDs();
-        if (targetView === 'resumes') {
-            populateJdFilter();
-            loadResumes();
-        }
-        if (targetView === 'candidates') {
-            populateJdFilter();
-            loadCandidates();
-        }
+        if (targetView === 'resumes') loadResumes();
+        if (targetView === 'candidates') loadCandidates();
+        if (targetView === 'settings') loadSelectedDefaultTemplate();
     });
 });
 
@@ -156,6 +151,7 @@ async function loadJDs() {
     } catch (e) {
         console.error('Failed to load JDs', e);
     }
+    populateJdFilter();
 }
 
 async function createJD(e) {
@@ -203,9 +199,12 @@ async function uploadFile(file) {
     formData.append('file', file);
     
     const jdSelect = document.getElementById('upload-jd-select');
-    if (jdSelect && jdSelect.value) {
-        formData.append('jd_id', jdSelect.value);
+    if (!jdSelect || !jdSelect.value) {
+        uploadStatus.style.color = 'var(--danger)';
+        uploadStatus.textContent = '✗ Error: A target job description is required for uploading resumes.';
+        return;
     }
+    formData.append('jd_id', jdSelect.value);
     
     try {
         const res = await fetch(API_BASE + '/resumes/upload', {
@@ -317,7 +316,7 @@ async function populateJdFilter() {
         // Also populate the upload target role select
         const uploadSelect = document.getElementById('upload-jd-select');
         if (uploadSelect) {
-            uploadSelect.innerHTML = '<option value="">General Pool (No Role)</option>';
+            uploadSelect.innerHTML = '<option value="" disabled selected>Select Job Description...</option>';
             jds.forEach(jd => {
                 const opt = document.createElement('option');
                 opt.value = jd.id;
@@ -336,6 +335,48 @@ async function populateJdFilter() {
 
 jdFilterSelect.addEventListener('change', loadCandidates);
 
+let selectedCandidates = new Set();
+
+function toggleSelectAllCandidates(masterCheckbox) {
+    const checkboxes = document.querySelectorAll('.candidate-checkbox');
+    selectedCandidates.clear();
+    checkboxes.forEach(cb => {
+        cb.checked = masterCheckbox.checked;
+        if (cb.checked) {
+            selectedCandidates.add(parseInt(cb.dataset.id));
+        }
+    });
+    updateBulkActionsState();
+}
+
+function onCandidateCheckboxChange(id, cb) {
+    if (cb.checked) {
+        selectedCandidates.add(id);
+    } else {
+        selectedCandidates.delete(id);
+    }
+    
+    // Update master select checkbox status
+    const master = document.getElementById('select-all-candidates');
+    const totalCount = document.querySelectorAll('.candidate-checkbox').length;
+    master.checked = (selectedCandidates.size === totalCount && totalCount > 0);
+    master.indeterminate = (selectedCandidates.size > 0 && selectedCandidates.size < totalCount);
+    
+    updateBulkActionsState();
+}
+
+function updateBulkActionsState() {
+    const countSpan = document.getElementById('selected-count');
+    countSpan.textContent = selectedCandidates.size + ' candidates selected';
+    
+    const emailBtn = document.getElementById('btn-bulk-email');
+    const scheduleBtn = document.getElementById('btn-bulk-schedule');
+    
+    const hasSelection = selectedCandidates.size > 0;
+    emailBtn.disabled = !hasSelection;
+    scheduleBtn.disabled = !hasSelection;
+}
+
 async function loadCandidates() {
     try {
         const jdId = jdFilterSelect.value;
@@ -343,15 +384,22 @@ async function loadCandidates() {
         const res = await fetch(url);
         const cands = await res.json();
         
+        // Reset bulk selection
+        selectedCandidates.clear();
+        document.getElementById('select-all-candidates').checked = false;
+        document.getElementById('select-all-candidates').indeterminate = false;
+        updateBulkActionsState();
+        
         candidatesTable.innerHTML = '';
         if (cands.length === 0) {
-            candidatesTable.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No candidates yet. Upload resumes and rank them against a JD.</td></tr>';
+            candidatesTable.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No candidates yet. Upload resumes and rank them against a JD.</td></tr>';
             return;
         }
         
         cands.forEach(c => {
             const score = c.similarity_score ? (c.similarity_score * 100).toFixed(1) + '%' : 'N/A';
             const name = c.resume ? (c.resume.candidate_name || 'Unknown') : 'Unknown';
+            const roleTitle = c.job_description ? c.job_description.title : 'JD #' + c.jd_id;
             
             let badgeClass = 'status-new';
             const st = c.status || 'New';
@@ -361,17 +409,56 @@ async function loadCandidates() {
             if (st.includes('Reject')) badgeClass = 'status-rejected';
 
             const row = document.createElement('tr');
-            row.innerHTML = '<td><strong>' + escapeHtml(name) + '</strong></td>' +
-                '<td><span class="status-badge ' + badgeClass + '">' + escapeHtml(st) + '</span></td>' +
-                '<td>' + score + '</td>' +
-                '<td>JD #' + c.jd_id + '</td>' +
-                '<td><button class="btn btn-sm btn-outline" onclick="viewCandidate(' + c.id + ')">Profile</button></td>';
+            row.innerHTML = `
+                <td><input type="checkbox" class="candidate-checkbox" data-id="${c.id}" onchange="onCandidateCheckboxChange(${c.id}, this)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);"></td>
+                <td><strong>${escapeHtml(name)}</strong></td>
+                <td><span class="status-badge ${badgeClass}">${escapeHtml(st)}</span></td>
+                <td><button class="btn btn-sm btn-outline" onclick="openNotesModal(${c.id}, \`${escapeHtml(c.notes || '').replace(/`/g, '&#96;')}\`)"><i class="fa-solid fa-pen-to-square"></i> Notes</button></td>
+                <td><button class="btn btn-sm btn-outline" onclick="viewCandidate(${c.id})">Profile</button></td>
+            `;
             candidatesTable.appendChild(row);
         });
     } catch (e) {
         console.error('Failed to load candidates', e);
     }
 }
+
+let currentNotesCandidateId = null;
+
+function openNotesModal(id, currentNotes) {
+    currentNotesCandidateId = id;
+    document.getElementById('candidate-notes-text').value = currentNotes || '';
+    document.getElementById('notes-modal').classList.add('active');
+}
+
+async function saveNotesFromModal() {
+    if (!currentNotesCandidateId) return;
+    const val = document.getElementById('candidate-notes-text').value;
+    const btn = document.getElementById('save-notes-btn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...';
+    
+    try {
+        const res = await fetch(API_BASE + '/candidates/' + currentNotesCandidateId + '/notes', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: val })
+        });
+        if (!res.ok) {
+            console.error('Failed to save notes');
+            alert('Failed to save notes.');
+        } else {
+            closeModals();
+            loadCandidates();
+        }
+    } catch (e) {
+        console.error('Error saving candidate notes:', e);
+    }
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+}
+
 
 async function triggerRanking() {
     const jdId = jdFilterSelect.value;
@@ -420,10 +507,13 @@ async function viewCandidate(id) {
     document.getElementById('candidate-modal').classList.add('active');
     document.getElementById('candidate-modal-title').textContent = 'Candidate #' + id;
     
-    // Reset sections
+    // Reset sections and convert to custom dropdowns
     document.getElementById('candidate-summary').textContent = 'No AI summary generated yet.';
     document.getElementById('candidate-questions').innerHTML = '';
     document.getElementById('email-preview').style.display = 'none';
+    
+    createCustomDropdown('email-template-select');
+    createCustomDropdown('round-status');
     
     try {
         const res = await fetch(API_BASE + '/candidates/' + id);
@@ -432,8 +522,50 @@ async function viewCandidate(id) {
         const name = data.resume ? (data.resume.candidate_name || 'Unknown') : 'Unknown';
         document.getElementById('candidate-modal-title').textContent = escapeHtml(name);
         document.getElementById('candidate-summary').textContent = data.summary || 'No AI summary generated yet.';
+        
+        // Render Match Details & Automation Status
+        const score = data.similarity_score ? (data.similarity_score * 100).toFixed(1) + '%' : 'N/A';
+        document.getElementById('cand-match-score').textContent = score;
+        
+        // Email Status Badge
+        const emailStatusEl = document.getElementById('cand-email-status');
+        emailStatusEl.textContent = data.email_status || 'Pending';
+        if (data.email_status === 'Sent') {
+            emailStatusEl.className = 'status-badge status-offer'; // Reuse green status class
+        } else if (data.email_status === 'Failed') {
+            emailStatusEl.className = 'status-badge status-rejected'; // Reuse red status class
+            emailStatusEl.title = data.email_error_reason || 'Unknown error';
+        } else {
+            emailStatusEl.className = 'status-badge status-screening'; // Reuse orange/grey
+        }
+        
+        document.getElementById('cand-calendar-event').textContent = data.calendar_event_id || 'None';
+        
+        const linkEl = document.getElementById('cand-meeting-link');
+        if (data.meeting_link) {
+            linkEl.innerHTML = '<a href="' + escapeHtml(data.meeting_link) + '" target="_blank" style="color: var(--primary); text-decoration: underline; font-weight: 600;"><i class="fa-solid fa-video"></i> Join Meet</a>';
+        } else {
+            linkEl.textContent = 'None';
+        }
+        
+        document.getElementById('cand-match-explanation').textContent = data.explanation || 'No explanation generated yet.';
+        
+        // Render existing questions if stored
+        const questionsList = document.getElementById('candidate-questions');
+        questionsList.innerHTML = '';
+        if (data.interview_questions) {
+            const questions = data.interview_questions.split('\n');
+            questions.forEach(q => {
+                if (q.trim()) {
+                    const li = document.createElement('li');
+                    li.textContent = q;
+                    questionsList.appendChild(li);
+                }
+            });
+        }
     } catch (e) {
         document.getElementById('candidate-summary').textContent = 'Failed to load candidate.';
+        console.error(e);
     }
     
     // Load pipeline stages
@@ -482,61 +614,98 @@ const PIPELINE_STAGES = [
     'Assignment', 'Final Round', 'Offer', 'Hired'
 ];
 
+const ALL_ROUNDS = ["Screening", "Phone Interview", "Technical Interview", "HR Interview", "Assignment", "Final Round", "Offer", "Hired", "Rejected"];
+let currentRoundIndex = 0;
+let candidateStages = [];
+
 async function loadPipeline(candidateId) {
-    const stepper = document.getElementById('pipeline-stepper');
-    stepper.innerHTML = '';
-    
-    let completedStages = [];
+    candidateStages = [];
     try {
         const res = await fetch(API_BASE + '/stages/candidate/' + candidateId);
-        const stages = await res.json();
-        completedStages = stages.map(s => s.stage);
+        candidateStages = await res.json();
     } catch (e) {
-        console.error('Failed to load pipeline', e);
+        console.error('Failed to load rounds history', e);
     }
     
-    const isRejected = completedStages.includes('Rejected');
-    const lastCompleted = completedStages.length > 0 ? completedStages[completedStages.length - 1] : null;
+    if (candidateStages.length > 0) {
+        const latestStage = candidateStages[candidateStages.length - 1].stage;
+        const idx = ALL_ROUNDS.indexOf(latestStage);
+        currentRoundIndex = idx >= 0 ? idx : 0;
+    } else {
+        currentRoundIndex = 0;
+    }
     
-    PIPELINE_STAGES.forEach((stage, idx) => {
-        const div = document.createElement('div');
-        div.className = 'pipeline-step';
-        
-        const isCompleted = completedStages.includes(stage);
-        const isActive = (lastCompleted === stage && !isRejected);
-        
-        if (isCompleted) div.classList.add('completed');
-        if (isActive) div.classList.add('active');
-        if (isRejected && stage === lastCompleted) div.classList.add('rejected');
-        
-        div.innerHTML = `
-            <div class="step-connector"></div>
-            <div class="step-dot">${isCompleted ? '<i class="fa-solid fa-check" style="font-size:0.6rem;color:white;"></i>' : (idx + 1)}</div>
-            <span class="step-label">${stage}</span>
-        `;
-        stepper.appendChild(div);
-    });
-    
-    if (isRejected) {
-        const rejDiv = document.createElement('div');
-        rejDiv.className = 'pipeline-step rejected';
-        rejDiv.innerHTML = `
-            <div class="step-connector"></div>
-            <div class="step-dot"><i class="fa-solid fa-xmark" style="font-size:0.6rem;color:white;"></i></div>
-            <span class="step-label">Rejected</span>
-        `;
-        stepper.appendChild(rejDiv);
+    renderRoundDetails();
+}
+
+function prevRound() {
+    if (currentRoundIndex > 0) {
+        currentRoundIndex--;
+        renderRoundDetails();
     }
 }
 
-async function advanceStage() {
-    if (!currentCandidateId) return;
-    const stage = document.getElementById('advance-stage-select').value;
-    if (!stage) { alert('Select a stage first.'); return; }
+function nextRound() {
+    if (currentRoundIndex < ALL_ROUNDS.length - 1) {
+        currentRoundIndex++;
+        renderRoundDetails();
+    }
+}
+
+function renderRoundDetails() {
+    const roundName = ALL_ROUNDS[currentRoundIndex];
+    document.getElementById('current-round-display').textContent = roundName;
     
-    const dateVal = document.getElementById('advance-stage-date').value;
-    const payload = { stage: stage };
-    if (dateVal) payload.scheduled_date = new Date(dateVal).toISOString();
+    const stageEntry = candidateStages.find(s => s.stage === roundName);
+    const badge = document.getElementById('round-status-badge');
+    
+    if (stageEntry) {
+        badge.textContent = stageEntry.status || 'Pending';
+        badge.className = 'status-badge ' + (stageEntry.status === 'Completed' ? 'status-offer' : (stageEntry.status === 'Failed' ? 'status-rejected' : 'status-screening'));
+        
+        document.getElementById('round-status').value = stageEntry.status || 'Pending';
+        document.getElementById('round-feedback').value = stageEntry.feedback_notes || '';
+        
+        if (stageEntry.scheduled_date) {
+            const date = new Date(stageEntry.scheduled_date);
+            const tzOffset = date.getTimezoneOffset() * 60000;
+            const localISOTime = (new Date(date - tzOffset)).toISOString().slice(0, 16);
+            document.getElementById('round-scheduled-date').value = localISOTime;
+        } else {
+            document.getElementById('round-scheduled-date').value = '';
+        }
+    } else {
+        badge.textContent = 'Not Started';
+        badge.className = 'status-badge status-new';
+        
+        document.getElementById('round-status').value = 'Pending';
+        document.getElementById('round-feedback').value = '';
+        document.getElementById('round-scheduled-date').value = '';
+    }
+    
+    createCustomDropdown('round-status');
+}
+
+async function saveRoundDetails() {
+    if (!currentCandidateId) return;
+    const roundName = ALL_ROUNDS[currentRoundIndex];
+    const status = document.getElementById('round-status').value;
+    const feedback = document.getElementById('round-feedback').value;
+    const scheduledDateVal = document.getElementById('round-scheduled-date').value;
+    
+    const btn = document.getElementById('btn-save-round');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Saving...';
+    
+    const payload = {
+        stage: roundName,
+        status: status,
+        feedback_notes: feedback
+    };
+    if (scheduledDateVal) {
+        payload.scheduled_date = new Date(scheduledDateVal).toISOString();
+    }
     
     try {
         const res = await fetch(API_BASE + '/stages/candidate/' + currentCandidateId, {
@@ -544,18 +713,21 @@ async function advanceStage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
+        
         if (res.ok) {
-            loadPipeline(currentCandidateId);
-            document.getElementById('advance-stage-select').value = '';
-            document.getElementById('advance-stage-date').value = '';
+            alert('Round details saved successfully!');
+            await loadPipeline(currentCandidateId);
+            loadCandidates();
         } else {
             const err = await res.json();
-            alert('Error: ' + (err.detail || 'Could not advance stage'));
+            alert('Error saving round details: ' + (err.detail || 'Unknown error'));
         }
     } catch (e) {
-        alert('Network error advancing stage.');
+        alert('Network error saving round details.');
         console.error(e);
     }
+    btn.disabled = false;
+    btn.innerHTML = originalText;
 }
 
 // ─── Email Generation ───────────────────────────────────────────────────────
@@ -563,17 +735,28 @@ async function generateEmail() {
     if (!currentCandidateId) return;
     const templateType = document.getElementById('email-template-select').value;
     
+    const subjectPattern = localStorage.getItem(`template_${templateType}_subject`);
+    const bodyPattern = localStorage.getItem(`template_${templateType}_body`);
+    
+    const customData = {};
+    if (subjectPattern) customData.subject_pattern = subjectPattern;
+    if (bodyPattern) customData.body_pattern = bodyPattern;
+    
     try {
         const res = await fetch(API_BASE + '/email/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ candidate_id: currentCandidateId, template_type: templateType })
+            body: JSON.stringify({
+                candidate_id: currentCandidateId,
+                template_type: templateType,
+                custom_data: customData
+            })
         });
         const data = await res.json();
         
         if (res.ok) {
-            document.getElementById('email-subject').textContent = 'Subject: ' + data.subject;
-            document.getElementById('email-body').textContent = data.body;
+            document.getElementById('email-subject').value = data.subject || '';
+            document.getElementById('email-body').value = data.body || '';
             document.getElementById('email-preview').style.display = 'block';
         } else {
             alert('Error: ' + (data.detail || 'Failed to generate email'));
@@ -584,14 +767,52 @@ async function generateEmail() {
     }
 }
 
+async function sendDraftedEmail() {
+    if (!currentCandidateId) return;
+    
+    const subject = document.getElementById('email-subject').value;
+    const body = document.getElementById('email-body').value;
+    const type = document.getElementById('email-template-select').value;
+    
+    const btn = document.querySelector('[onclick="sendDraftedEmail()"]');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Sending...';
+    
+    try {
+        const res = await fetch(API_BASE + '/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                candidate_id: currentCandidateId,
+                template_type: type,
+                custom_data: {
+                    subject_override: subject,
+                    body_override: body
+                }
+            })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+            alert('Email sent successfully!');
+            viewCandidate(currentCandidateId);
+        } else {
+            alert('Failed to send email: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Network error sending email.');
+    }
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+}
+
 function copyEmail() {
-    const subject = document.getElementById('email-subject').textContent;
-    const body = document.getElementById('email-body').textContent;
-    const full = subject + '\n\n' + body;
+    const subject = document.getElementById('email-subject').value;
+    const body = document.getElementById('email-body').value;
+    const full = 'Subject: ' + subject + '\n\n' + body;
     navigator.clipboard.writeText(full).then(() => {
         alert('Email copied to clipboard!');
     }).catch(() => {
-        // Fallback
         const ta = document.createElement('textarea');
         ta.value = full;
         document.body.appendChild(ta);
@@ -709,17 +930,14 @@ async function runFullPipeline() {
     btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Running Pipeline...';
     
     try {
-        const res = await fetch(API_BASE + '/agent/execute', {
+        const res = await fetch(API_BASE + '/agent/pipeline/' + jdId, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                instruction: 'Run the full recruitment pipeline for job description #' + jdId + '. Rank all candidates, generate a summary for the top candidate, and generate interview questions for the top candidate.'
-            })
+            headers: { 'Content-Type': 'application/json' }
         });
         const data = await res.json();
         
         if (res.ok) {
-            alert('Full pipeline completed! ' + (data.summary || ''));
+            alert('Full pipeline completed successfully! ' + (data.summary || ''));
         } else {
             alert('Pipeline error: ' + (data.detail || 'Unknown error'));
         }
@@ -785,14 +1003,26 @@ async function sendAgentMessage() {
         
         // Tool actions trace
         if (data.actions && data.actions.length > 0) {
-            html += '<div class="tool-trace"><h4><i class="fa-solid fa-wrench"></i> Actions Taken (' + data.actions.length + '):</h4>';
-            data.actions.forEach(a => {
-                const resultStr = JSON.stringify(a.result, null, 2);
-                html += '<strong>' + escapeHtml(a.tool) + '</strong><br>' +
-                    '<pre style="white-space: pre-wrap; font-size: 0.8rem; margin: 4px 0 12px 0; max-height: 150px; overflow-y: auto;">' +
-                    escapeHtml(resultStr) + '</pre>';
+            html += '<div class="tool-trace" style="margin-top: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--glass-border);">';
+            html += '<h4 style="margin: 0 0 10px 0; font-size: 0.9rem; color: var(--text-muted);"><i class="fa-solid fa-list-check"></i> Execution Log (' + data.actions.length + ' steps):</h4>';
+            html += '<ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">';
+            data.actions.forEach((a, i) => {
+                const success = a.result && a.result.success;
+                const icon = success ? '<i class="fa-solid fa-circle-check" style="color: var(--success-color);"></i>' : '<i class="fa-solid fa-circle-xmark" style="color: var(--error-color);"></i>';
+                
+                // Try to extract a clean summary from the result, fallback to a brief stringified version
+                let detail = '';
+                if (a.result && a.result.detail) detail = a.result.detail;
+                else if (a.result && a.result.note) detail = a.result.note;
+                else if (a.result && a.result.error) detail = a.result.error;
+                else detail = Object.keys(a.result).filter(k => k !== 'success').map(k => `${k}: ${a.result[k]}`).join(', ').substring(0, 100);
+                
+                html += `<li style="font-size: 0.85rem; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border-left: 3px solid ${success ? 'var(--success-color)' : 'var(--error-color)'};">`;
+                html += `  <div style="display: flex; align-items: center; gap: 8px; font-weight: 500;">${icon} Step ${i+1}: <code>${escapeHtml(a.tool)}</code></div>`;
+                html += `  <div style="margin-top: 4px; color: var(--text-muted); padding-left: 22px;">${escapeHtml(detail)}</div>`;
+                html += `</li>`;
             });
-            html += '</div>';
+            html += '</ul></div>';
         }
         
         appendSystemMessage(html, true);
@@ -819,6 +1049,198 @@ function appendSystemMessage(html, isRaw) {
     chatHistory.scrollTo(0, chatHistory.scrollHeight);
 }
 
+// ─── Bulk Actions ───────────────────────────────────────────────────────────
+async function bulkSendEmail() {
+    if (selectedCandidates.size === 0) return;
+    
+    const btn = document.getElementById('btn-bulk-email');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Sending...';
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    try {
+        const jdId = jdFilterSelect.value;
+        const url = jdId ? (API_BASE + '/candidates/?jd_id=' + jdId) : (API_BASE + '/candidates/');
+        const res = await fetch(url);
+        const cands = await res.json();
+        
+        for (const candId of selectedCandidates) {
+            const cand = cands.find(c => c.id === candId);
+            if (!cand) continue;
+            
+            let templateType = 'follow_up';
+            const st = (cand.status || '').toLowerCase();
+            if (st.includes('reject')) {
+                templateType = 'rejection';
+            } else if (st.includes('interview')) {
+                templateType = 'interview_scheduling';
+            } else if (st.includes('offer') || st.includes('hire')) {
+                templateType = 'offer';
+            }
+            
+            
+            const subjectPattern = localStorage.getItem(`template_${templateType}_subject`);
+            const bodyPattern = localStorage.getItem(`template_${templateType}_body`);
+            
+            const customData = {};
+            if (subjectPattern) customData.subject_pattern = subjectPattern;
+            if (bodyPattern) customData.body_pattern = bodyPattern;
+            
+            try {
+                const sendRes = await fetch(API_BASE + '/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        candidate_id: candId,
+                        template_type: templateType,
+                        custom_data: customData
+                    })
+                });
+                const sendData = await sendRes.json();
+                if (sendRes.ok && sendData.success) {
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            } catch (err) {
+                failCount++;
+            }
+        }
+        
+        alert(`Status Emails Sent!\nSuccessful: ${successCount}\nFailed: ${failCount}`);
+    } catch (e) {
+        alert('Error processing bulk emails.');
+        console.error(e);
+    }
+    
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+    loadCandidates();
+}
+
+function openBulkScheduleModal() {
+    if (selectedCandidates.size === 0) return;
+    document.getElementById('bulk-schedule-modal').classList.add('active');
+}
+
+async function bulkScheduleMeetings(e) {
+    e.preventDefault();
+    if (selectedCandidates.size === 0) return;
+    
+    const title = document.getElementById('bulk-meeting-title').value.trim();
+    const datetime = document.getElementById('bulk-meeting-datetime').value;
+    const duration = parseInt(document.getElementById('bulk-meeting-duration').value) || 30;
+    const notes = document.getElementById('bulk-meeting-notes').value.trim();
+    
+    const submitBtn = document.querySelector('#bulk-schedule-form button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Scheduling...';
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const candId of selectedCandidates) {
+        const code = Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5);
+        const link = `https://meet.google.com/${code}`;
+        
+        const payload = {
+            title: title,
+            meeting_link: link,
+            scheduled_at: new Date(datetime).toISOString(),
+            duration_minutes: duration,
+            notes: notes
+        };
+        
+        try {
+            const res = await fetch(API_BASE + '/meetings/candidate/' + candId, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                await fetch(API_BASE + '/stages/candidate/' + candId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        stage: 'Technical Interview',
+                        scheduled_date: new Date(datetime).toISOString()
+                    })
+                });
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } catch (err) {
+            failCount++;
+        }
+    }
+    
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = originalText;
+    
+    closeModals();
+    document.getElementById('bulk-schedule-form').reset();
+    
+    alert(`Interviews Scheduled!\nSuccessful: ${successCount}\nFailed: ${failCount}`);
+    loadCandidates();
+}
+
+// ─── Settings Default Templates ─────────────────────────────────────────────
+const DEFAULT_TEMPLATES_MAPPING = {
+    interview_scheduling: {
+        subject: "Interview Invitation: #name - #position",
+        body: "Dear #name,\n\nWe are pleased to invite you to schedule your Technical Interview for the #position role.\n\nDate: #date\n\nBest regards,\nRecruitment Team"
+    },
+    offer: {
+        subject: "Job Offer: #name - #position",
+        body: "Dear #name,\n\nWe are thrilled to offer you the #position position at our company.\n\nStage reached: #stage\n\nBest regards,\nRecruitment Team"
+    },
+    rejection: {
+        subject: "Application Update: #name - #position",
+        body: "Dear #name,\n\nThank you for interest in the #position role. Unfortunately, we will not be moving forward with your application at this time.\n\nBest regards,\nRecruitment Team"
+    },
+    follow_up: {
+        subject: "Follow-up: #name - #position",
+        body: "Dear #name,\n\nWe are writing to follow up on your recent application status for the #position role.\n\nBest regards,\nRecruitment Team"
+    }
+};
+
+function initializeDefaultTemplates() {
+    Object.keys(DEFAULT_TEMPLATES_MAPPING).forEach(type => {
+        if (!localStorage.getItem(`template_${type}_subject`)) {
+            localStorage.setItem(`template_${type}_subject`, DEFAULT_TEMPLATES_MAPPING[type].subject);
+        }
+        if (!localStorage.getItem(`template_${type}_body`)) {
+            localStorage.setItem(`template_${type}_body`, DEFAULT_TEMPLATES_MAPPING[type].body);
+        }
+    });
+}
+
+function loadSelectedDefaultTemplate() {
+    createCustomDropdown('settings-template-type');
+    const type = document.getElementById('settings-template-type').value;
+    const subject = localStorage.getItem(`template_${type}_subject`);
+    const body = localStorage.getItem(`template_${type}_body`);
+    
+    document.getElementById('settings-template-subject').value = subject || '';
+    document.getElementById('settings-template-body').value = body || '';
+}
+
+function saveDefaultTemplate() {
+    const type = document.getElementById('settings-template-type').value;
+    const subject = document.getElementById('settings-template-subject').value;
+    const body = document.getElementById('settings-template-body').value;
+    
+    localStorage.setItem(`template_${type}_subject`, subject);
+    localStorage.setItem(`template_${type}_body`, body);
+    
+    alert('Default template pattern saved!');
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function escapeHtml(str) {
     if (!str) return '';
@@ -828,5 +1250,6 @@ function escapeHtml(str) {
 }
 
 // ─── Initialize ─────────────────────────────────────────────────────────────
+initializeDefaultTemplates();
 checkHealth();
 loadJDs();

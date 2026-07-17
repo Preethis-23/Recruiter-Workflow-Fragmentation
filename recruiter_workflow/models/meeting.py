@@ -15,6 +15,7 @@ class Meeting(Base):
     duration_minutes = Column(Integer, nullable=True, default=30)
     attendees = Column(Text, nullable=True)  # comma-separated emails
     notes = Column(Text, nullable=True)
+    calendar_event_id = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     candidate = relationship("Candidate", backref="meetings")
@@ -29,5 +30,6 @@ class Meeting(Base):
             "duration_minutes": self.duration_minutes,
             "attendees": self.attendees,
             "notes": self.notes,
+            "calendar_event_id": self.calendar_event_id,
             "created_at": str(self.created_at) if self.created_at else None,
         }

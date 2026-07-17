@@ -81,7 +81,15 @@ class CandidateResponse(BaseModel):
     resume: Optional[ResumeResponse] = None
     similarity_score: Optional[float] = None
     summary: Optional[str] = None
+    explanation: Optional[str] = None
+    interview_questions: Optional[str] = None
+    email_status: Optional[str] = None
+    email_error_reason: Optional[str] = None
+    calendar_event_id: Optional[str] = None
+    meeting_link: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
     status: str = "New"
+    notes: Optional[str] = None
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -89,6 +97,9 @@ class CandidateResponse(BaseModel):
 
 class CandidateStatusUpdate(BaseModel):
     status: str = Field(..., min_length=1)
+
+class CandidateNotesUpdate(BaseModel):
+    notes: Optional[str] = None
 
 
 # ─── Recruitment Stage ────────────────────────────────────────────────────────
@@ -153,6 +164,7 @@ class MeetingCreate(BaseModel):
     duration_minutes: Optional[int] = Field(30, ge=5, le=480)
     attendees: Optional[str] = None
     notes: Optional[str] = None
+    calendar_event_id: Optional[str] = None
 
 
 class MeetingUpdate(BaseModel):
@@ -162,6 +174,7 @@ class MeetingUpdate(BaseModel):
     duration_minutes: Optional[int] = Field(None, ge=5, le=480)
     attendees: Optional[str] = None
     notes: Optional[str] = None
+    calendar_event_id: Optional[str] = None
 
 
 class MeetingResponse(BaseModel):
@@ -173,6 +186,7 @@ class MeetingResponse(BaseModel):
     duration_minutes: Optional[int] = None
     attendees: Optional[str] = None
     notes: Optional[str] = None
+    calendar_event_id: Optional[str] = None
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

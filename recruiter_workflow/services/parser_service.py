@@ -68,7 +68,8 @@ def parse_resume_sections(raw_text: str) -> dict[str, Optional[str]]:
 
         # Extract email
         if not sections["email"]:
-            email_match = re.search(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b", stripped)
+            clean_str = re.sub(r'(?i)envel[^\w]*pe', '', stripped)
+            email_match = re.search(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b", clean_str)
             if email_match:
                 sections["email"] = email_match.group(0)
 

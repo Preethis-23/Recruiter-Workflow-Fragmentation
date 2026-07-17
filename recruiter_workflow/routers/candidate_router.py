@@ -6,6 +6,7 @@ from recruiter_workflow.models import Candidate, JobDescription, Resume
 from recruiter_workflow.schemas import (
     CandidateResponse,
     CandidateStatusUpdate,
+    CandidateNotesUpdate,
 )
 from recruiter_workflow.services.ranking_service import rank_resumes_for_jd, get_ranked_candidates
 from recruiter_workflow.services.llm_service import generate_summary
@@ -53,6 +54,22 @@ def update_candidate_status(
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
     candidate.status = payload.status
+    db.commit()
+    db.refresh(candidate)
+    return candidate
+
+
+@router.put("/{candidate_id}/notes", response_model=CandidateResponse)
+def update_candidate_notes(
+    candidate_id: int,
+    payload: CandidateNotesUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update a candidate's performance notes."""
+    candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    candidate.notes = payload.notes
     db.commit()
     db.refresh(candidate)
     return candidate

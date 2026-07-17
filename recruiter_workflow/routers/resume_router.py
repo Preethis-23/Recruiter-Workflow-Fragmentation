@@ -82,6 +82,16 @@ def upload_resume_file(
                 new_candidate = Candidate(jd_id=jd_id, resume_id=existing.id, status="New")
                 db.add(new_candidate)
                 db.commit()
+                db.refresh(new_candidate)
+                
+                # Trigger autonomous workflow
+                from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+                try:
+                    run_candidate_workflow(db, new_candidate.id)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Error running automated workflow for candidate {new_candidate.id}: {e}", exc_info=True)
+                
                 return existing # Successfully linked
         else:
             raise HTTPException(status_code=409, detail=f"A resume with filename '{filename}' already exists in the general pool. Select a specific Job Description to assign it to a new role.")
@@ -120,6 +130,16 @@ def upload_resume_file(
         candidate = Candidate(jd_id=jd_id, resume_id=resume.id, status="New")
         db.add(candidate)
         db.commit()
+        db.refresh(candidate)
+        
+        # Trigger autonomous workflow
+        from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+        try:
+            run_candidate_workflow(db, candidate.id)
+        except Exception as e:
+            # We catch exceptions to make sure the API response succeeds even if LLM/Google Calendar fails, but log it
+            import logging
+            logging.getLogger(__name__).error(f"Error running automated workflow for candidate {candidate.id}: {e}", exc_info=True)
 
     return resume
 

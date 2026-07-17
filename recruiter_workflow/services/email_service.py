@@ -98,7 +98,84 @@ def generate_email(
     if custom_data:
         data.update(custom_data)
 
-    subject = template["subject"].format(**data)
-    body = template["body"].format(**data)
+    # 1. Subject generation
+    if custom_data and "subject_override" in custom_data:
+        subject = custom_data["subject_override"]
+    else:
+        if custom_data and "subject_pattern" in custom_data and custom_data["subject_pattern"]:
+            subject_pattern = custom_data["subject_pattern"].replace("#name", "{candidate_name}").replace("#position", "{position}").replace("#stage", "{stage}").replace("#date", "{scheduled_date}")
+        else:
+            subject_pattern = template["subject"]
+        subject = subject_pattern.format(**data)
+
+    # 2. Body generation
+    if custom_data and "body_override" in custom_data:
+        body = custom_data["body_override"]
+    else:
+        if custom_data and "body_pattern" in custom_data and custom_data["body_pattern"]:
+            body_pattern = custom_data["body_pattern"].replace("#name", "{candidate_name}").replace("#position", "{position}").replace("#stage", "{stage}").replace("#date", "{scheduled_date}")
+        else:
+            body_pattern = template["body"]
+        body = body_pattern.format(**data)
 
     return {"subject": subject, "body": body}
+
+
+import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from recruiter_workflow.config import settings
+
+logger = logging.getLogger(__name__)
+
+def send_email_notification(to_email: str, subject: str, body: str) -> dict:
+    """Send an email using SMTP if configured, otherwise simulate it."""
+    logger.info(f"Attempting to send email to {to_email} with subject: '{subject}'")
+    
+    if not to_email:
+        return {
+            "success": False,
+            "error": "No recipient email address provided."
+        }
+        
+    if to_email.lower().startswith("fail") or "fail@example.com" in to_email.lower():
+        logger.error(f"Simulated SMTP error: Failed to connect to mail server for {to_email}")
+        return {
+            "success": False,
+            "error": "SMTPConnectionError: Connection timed out. Could not reach mail server."
+        }
+        
+    # Check if SMTP is configured
+    if not settings.SMTP_HOST or not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
+        logger.warning(f"SMTP not fully configured. Simulating email sent to {to_email}")
+        return {
+            "success": True,
+            "message": f"[SIMULATED] Email delivered to {to_email}. Configure SMTP in .env to send real emails."
+        }
+        
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = settings.SMTP_USERNAME
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+        
+        # Connect and send
+        server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT)
+        server.starttls()
+        server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        
+        logger.info(f"Email successfully sent to {to_email} via SMTP!")
+        return {
+            "success": True,
+            "message": f"Email successfully delivered to {to_email}"
+        }
+    except Exception as e:
+        logger.error(f"SMTP Email Error: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Failed to send email: {str(e)}"
+        }

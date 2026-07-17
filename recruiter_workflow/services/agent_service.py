@@ -218,6 +218,39 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "process_candidate",
+            "description": "Run the entire autonomous recruitment workflow for a candidate (ranking, explanation, summary, questions, scheduling, and email)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {"type": "integer", "description": "Candidate ID to process"},
+                },
+                "required": ["candidate_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hire_for_role",
+            "description": "Execute a COMPLETE autonomous hiring workflow from scratch. Creates a job description, searches all existing resumes in the database, ranks candidates by AI similarity, generates summaries and interview questions for top candidates, schedules interviews, and sends emails. Use this when the user says 'hire', 'recruit', 'find candidates for', or describes a role to fill.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role_title": {"type": "string", "description": "The job title to hire for, e.g. 'Python ML Engineer'"},
+                    "department": {"type": "string", "description": "Department name, e.g. 'Engineering'"},
+                    "location": {"type": "string", "description": "Job location, e.g. 'Remote'"},
+                    "required_skills": {"type": "string", "description": "Comma-separated skills, e.g. 'Python, Machine Learning, TensorFlow'"},
+                    "min_experience": {"type": "integer", "description": "Minimum years of experience"},
+                    "top_n": {"type": "integer", "description": "Number of top candidates to fully process (default: 5)"}
+                },
+                "required": ["role_title"],
+            },
+        },
+    },
 ]
 
 
@@ -430,6 +463,18 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
                 ],
             }
         
+        elif tool_name == "process_candidate":
+            try:
+                candidate_id = int(arguments["candidate_id"])
+            except (ValueError, TypeError):
+                return {"success": False, "error": "candidate_id must be an integer"}
+            
+            from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+            return run_candidate_workflow(db, candidate_id)
+        
+        elif tool_name == "hire_for_role":
+            return _execute_hire_workflow(arguments, db)
+        
         else:
             return {"success": False, "error": f"Unknown tool: {tool_name}"}
     
@@ -440,23 +485,26 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
 
 # ─── Agent Execution Engine ──────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an AI recruitment assistant agent. You help recruiters automate their workflow by executing tasks using the available tools.
+SYSTEM_PROMPT = """You are an autonomous AI recruitment agent. You execute complete hiring workflows independently without asking for confirmation.
+
+CRITICAL RULES:
+1. When someone says "hire", "recruit", "find candidates for", "I need a", or describes ANY role to fill → ALWAYS use the `hire_for_role` tool. This is your PRIMARY tool.
+2. When asked to "process a candidate" or "run pipeline" for a specific candidate ID → use `process_candidate`.
+3. NEVER ask for clarification. Make reasonable assumptions and execute.
+4. Chain multiple tools autonomously if needed.
 
 Your capabilities:
-1. Create and manage job descriptions
-2. Parse and analyze resumes
-3. Rank candidates against job descriptions using AI similarity scoring
-4. Generate AI-powered candidate summaries
-5. Generate tailored interview questions
-6. Draft recruitment emails (interview scheduling, offers, rejections, follow-ups)
-7. Update candidate statuses and track recruitment pipeline stages
+- `hire_for_role` — FULL autonomous workflow: create JD → search resumes → rank → summarize → interview questions → schedule → send emails
+- `process_candidate` — Process a single candidate through the full pipeline
+- `create_job_description` — Create a new job description
+- `rank_candidates_for_jd` — Rank all resumes against a JD
+- `generate_candidate_summary` — AI summary for a candidate
+- `generate_interview_questions` — Tailored interview questions
+- `generate_email` — Draft recruitment emails
+- `update_candidate_status` — Move candidate through pipeline
+- `list_job_descriptions`, `list_resumes`, `list_candidates` — Query data
 
-When given an instruction:
-- Break it down into concrete steps
-- Use the appropriate tools to complete each step
-- Provide a clear summary of what you accomplished
-
-Always think about what tools you need to call to fulfill the request. If you need data first (e.g., listing JDs to find an ID), call the appropriate tool first."""
+You are an AGENTIC system. You decide what to do, execute it, and report results."""
 
 
 def execute_agent(instruction: str, db: Session) -> dict:
@@ -577,6 +625,55 @@ def _generate_fallback_response(instruction: str, db: Session) -> str:
     
     results = []
     
+    import re
+    
+    # ── Hire / Recruit detection (HIGHEST PRIORITY) ──
+    hire_keywords = ["hire", "recruit", "find candidates for", "i need a", "looking for", "search for", "fill the role", "open a position", "start hiring"]
+    if any(kw in lower for kw in hire_keywords):
+        # Extract the role title from the instruction
+        role_title = instruction.strip()
+        # Try to clean common prefixes
+        for prefix in ["hire a", "hire an", "recruit a", "recruit an", "find candidates for", "find candidates for a", "i need a", "i need an", "looking for a", "looking for an", "search for a", "search for an"]:
+            if lower.startswith(prefix):
+                role_title = instruction[len(prefix):].strip()
+                break
+        
+        workflow_result = _execute_hire_workflow({"role_title": role_title}, db)
+        if workflow_result.get("success"):
+            results.append(f"✅ Autonomous hiring workflow completed for: {role_title}")
+            results.append(f"")
+            results.append(f"📋 JD Created: ID #{workflow_result.get('jd_id')} — {workflow_result.get('jd_title')}")
+            results.append(f"👥 Candidates Found: {workflow_result.get('total_candidates', 0)}")
+            results.append(f"🏆 Top Candidates Processed: {workflow_result.get('processed_count', 0)}")
+            results.append(f"")
+            for step in workflow_result.get("steps", []):
+                icon = "✅" if step.get("status") == "success" else "❌"
+                results.append(f"  {icon} {step.get('step')}: {step.get('detail', '')}")
+        else:
+            results.append(f"❌ Hiring workflow failed: {workflow_result.get('error', 'Unknown error')}")
+        return "\n".join(results)
+    
+    # ── Process candidate detection ──
+    match = re.search(r"(?:process|run workflow|automate|run pipeline|pipeline)(?:\s+for|\s+on|\s+candidate)?(?:\s+id)?\s*#?\s*(\d+)", lower)
+    if match:
+        candidate_id = int(match.group(1))
+        from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+        try:
+            workflow_res = run_candidate_workflow(db, candidate_id)
+            if workflow_res.get("success"):
+                results.append(f"Successfully processed candidate ID {candidate_id} through the automated workflow:")
+                results.append(f"  • Match Score: {int(workflow_res.get('similarity_score', 0) * 100)}%")
+                results.append(f"  • Explanation: {workflow_res.get('explanation')}")
+                results.append(f"  • Meeting Link: {workflow_res.get('meeting_link')}")
+                results.append(f"  • Calendar Event ID: {workflow_res.get('calendar_event_id')}")
+                results.append(f"  • Email Status: {workflow_res.get('email_status')}")
+                if workflow_res.get("email_error_reason"):
+                    results.append(f"  • Email Error: {workflow_res.get('email_error_reason')}")
+            else:
+                results.append(f"Failed to process candidate ID {candidate_id}: {workflow_res.get('error')}")
+        except Exception as e:
+            results.append(f"Error running automated workflow for candidate ID {candidate_id}: {e}")
+            
     if any(kw in lower for kw in ["list jd", "show jd", "job description", "all jobs", "open position"]):
         jds = db.query(JobDescription).order_by(JobDescription.created_at.desc()).all()
         if jds:
@@ -611,10 +708,10 @@ def _generate_fallback_response(instruction: str, db: Session) -> str:
     return (
         "I understood your instruction but couldn't determine the specific tools to call. "
         "Try being more specific, for example:\n"
-        "  • 'List all job descriptions'\n"
+        "  • 'Hire a Python ML Engineer'\n"
+        "  • 'Recruit a Data Scientist'\n"
         "  • 'Rank all resumes against job description ID 1'\n"
         "  • 'Generate interview questions for candidate ID 3'\n"
-        "  • 'Create a job description for a Senior Python Developer'\n"
         "  • 'Send an interview scheduling email for candidate ID 2'\n"
         "  • 'Show me all candidates with status Interview'"
     )
@@ -623,14 +720,11 @@ def _generate_fallback_response(instruction: str, db: Session) -> str:
 # ─── Pipeline execution (pre-built workflow) ────────────────────────────────
 
 def execute_pipeline(jd_id: int, db: Session) -> dict:
-    """Execute a full recruitment pipeline for a job description.
+    """Execute a full autonomous recruitment pipeline for a job description.
     
     Steps:
     1. Rank all resumes against the JD
-    2. Generate summaries for top candidates
-    3. Generate interview questions for top candidates
-    4. Create screening stages for top candidates
-    5. Draft interview scheduling emails
+    2. Run candidate workflow automation (scoring, explanation, summary, questions, stages, calendar scheduling, email sending)
     
     Returns a comprehensive report.
     """
@@ -642,7 +736,7 @@ def execute_pipeline(jd_id: int, db: Session) -> dict:
         "success": True,
     }
     
-    # Step 1: Rank candidates
+    # Step 1: Rank candidates to make sure scores and mappings are ready
     try:
         ranking_result = _execute_tool("rank_candidates_for_jd", {"jd_id": jd_id}, db)
         pipeline_results["steps"].append({
@@ -659,76 +753,130 @@ def execute_pipeline(jd_id: int, db: Session) -> dict:
         pipeline_results["error"] = f"Ranking failed: {e}"
         return pipeline_results
     
-    # Step 2: Get ranked candidates and process top ones
-    ranked = get_ranked_candidates(db, jd_id)
-    top_candidates = ranked[:5]  # Top 5
+    # Step 2: Get all candidates linked to this JD
+    candidates = db.query(Candidate).filter(Candidate.jd_id == jd_id).all()
     
     pipeline_results["steps"].append({
-        "step": "identify_top_candidates",
-        "count": len(top_candidates),
+        "step": "identify_candidates",
+        "count": len(candidates),
         "candidates": [
-            {"id": c["id"], "name": c.get("candidate_name"), "score": c.get("similarity_score")}
-            for c in top_candidates
+            {"id": c.id, "name": c.resume.candidate_name if c.resume else None}
+            for c in candidates
         ],
     })
     
-    # Step 3-5: Process each top candidate
-    for candidate_data in top_candidates:
-        cid = candidate_data["id"]
-        
-        # Generate summary
-        summary_result = _execute_tool("generate_candidate_summary", {"candidate_id": cid}, db)
-        pipeline_results["steps"].append({
-            "step": f"summary_candidate_{cid}",
-            "result": summary_result,
-        })
-        
-        # Generate interview questions
-        questions_result = _execute_tool(
-            "generate_interview_questions", {"candidate_id": cid, "count": 5}, db
-        )
-        pipeline_results["steps"].append({
-            "step": f"questions_candidate_{cid}",
-            "result": questions_result,
-        })
-        
-        # Create screening stage
-        stage_result = _execute_tool(
-            "create_recruitment_stage",
-            {"candidate_id": cid, "stage": "Screening", "notes": "Auto-created by pipeline"},
-            db,
-        )
-        pipeline_results["steps"].append({
-            "step": f"stage_candidate_{cid}",
-            "result": stage_result,
-        })
-        
-        # Update status
-        _execute_tool("update_candidate_status", {"candidate_id": cid, "status": "Screening"}, db)
-        
-        # Generate interview scheduling email
-        email_result = _execute_tool(
-            "generate_email",
-            {"candidate_id": cid, "template_type": "interview_scheduling"},
-            db,
-        )
-        pipeline_results["steps"].append({
-            "step": f"email_candidate_{cid}",
-            "result": email_result,
-        })
+    # Step 3: Run the complete autonomous candidate workflow for each candidate
+    from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+    for candidate in candidates:
+        try:
+            workflow_res = run_candidate_workflow(db, candidate.id)
+            pipeline_results["steps"].append({
+                "step": f"workflow_candidate_{candidate.id}",
+                "result": workflow_res,
+            })
+        except Exception as e:
+            logger.error(f"Error executing automated workflow for candidate {candidate.id}: {e}", exc_info=True)
+            pipeline_results["steps"].append({
+                "step": f"workflow_candidate_{candidate.id}",
+                "result": {"success": False, "error": str(e)},
+            })
     
     # Generate final summary
     summary_text = _call_llm(
         system_prompt="Summarize this recruitment pipeline execution concisely.",
-        user_prompt=f"Pipeline processed JD #{jd_id} with {len(top_candidates)} top candidates. "
-                     f"Steps: ranking, summary generation, interview questions, stage creation, email drafting.",
+        user_prompt=f"Pipeline processed JD #{jd_id} with {len(candidates)} candidates. "
+                     f"Steps executed: ranking, match explanation, summaries, interview questions, stage advancement, Google calendar scheduling, and automated interview emails.",
         max_tokens=200,
     )
     
     pipeline_results["summary"] = summary_text or (
         f"Pipeline completed: Ranked candidates for JD #{jd_id}, "
-        f"processed {len(top_candidates)} top candidates with summaries, "
-        f"interview questions, screening stages, and email drafts."
+        f"fully automated candidate workflow processing for {len(candidates)} candidates, "
+        f"updating their matches, summaries, questions, calendar events, and email invitations."
     )
     
     return pipeline_results
+
+
+def _execute_hire_workflow(arguments: dict, db: Session) -> dict:
+    """Core autonomous orchestrator for the 'hire_for_role' workflow."""
+    role_title = arguments.get("role_title", "New Position")
+    dept = arguments.get("department", "Engineering")
+    req_skills = arguments.get("required_skills", "")
+    top_n = arguments.get("top_n", 5)
+    
+    logger.info(f"Starting FULL autonomous hiring workflow for: {role_title}")
+    
+    result = {
+        "success": True,
+        "steps": [],
+        "jd_id": None,
+        "jd_title": role_title,
+        "total_candidates": 0,
+        "processed_count": 0
+    }
+    
+    # 1. Create JD
+    try:
+        desc_prompt = f"Write a professional 2-paragraph job description for a {role_title} in {dept}. Required skills: {req_skills}."
+        description = _call_llm("You are an expert technical recruiter.", desc_prompt, max_tokens=300) or f"Job Description for {role_title}"
+        
+        jd = JobDescription(
+            title=role_title,
+            department=dept,
+            description=description,
+            required_skills=req_skills
+        )
+        db.add(jd)
+        db.commit()
+        db.refresh(jd)
+        jd_id = jd.id
+        result["jd_id"] = jd_id
+        result["steps"].append({"step": "Create Job Description", "status": "success", "detail": f"Created JD #{jd_id} '{role_title}'"})
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Failed to create JD: {e}"
+        return result
+        
+    # 2. Search all existing resumes and link to JD
+    try:
+        resumes = db.query(Resume).all()
+        for r in resumes:
+            existing_candidate = db.query(Candidate).filter(Candidate.jd_id == jd_id, Candidate.resume_id == r.id).first()
+            if not existing_candidate:
+                c = Candidate(jd_id=jd_id, resume_id=r.id)
+                db.add(c)
+        db.commit()
+        result["total_candidates"] = len(resumes)
+        result["steps"].append({"step": "Search Resumes", "status": "success", "detail": f"Found {len(resumes)} existing resumes in database."})
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Failed to link resumes: {e}"
+        return result
+        
+    # 3. Rank Candidates
+    try:
+        from recruiter_workflow.services.ranking_service import rank_resumes_for_jd
+        rank_resumes_for_jd(db, jd_id)
+        result["steps"].append({"step": "AI Resume Ranking", "status": "success", "detail": "Ranked all candidates against JD."})
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Failed to rank resumes: {e}"
+        return result
+        
+    # 4. Process Top N Candidates
+    try:
+        top_candidates = db.query(Candidate).filter(Candidate.jd_id == jd_id).order_by(Candidate.similarity_score.desc().nulls_last()).limit(top_n).all()
+        from recruiter_workflow.services.pipeline_service import run_candidate_workflow
+        
+        for c in top_candidates:
+            run_candidate_workflow(db, c.id)
+            result["processed_count"] += 1
+            
+        result["steps"].append({"step": "Candidate Processing", "status": "success", "detail": f"Automated workflow completed for top {result['processed_count']} candidates (summaries, questions, schedule, email)."})
+    except Exception as e:
+        result["success"] = False
+        result["error"] = f"Failed to process candidates: {e}"
+        return result
+        
+    return result

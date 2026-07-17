@@ -49,9 +49,10 @@ class Settings(BaseSettings):
     # LLM Provider: "openai" or "ollama"
     LLM_PROVIDER: str = "ollama"
     
-    # OpenAI settings
+    # OpenAI (or compatible, e.g. OpenRouter) settings
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-3.5-turbo"
+    OPENAI_BASE_URL: Optional[str] = None
     
     # Ollama settings
     OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -68,6 +69,12 @@ class Settings(BaseSettings):
     # Agent settings
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_VERBOSE: bool = True
+    
+    # SMTP Email settings
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
     
     model_config = SettingsConfigDict(
         env_file=".env",
