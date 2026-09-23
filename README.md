@@ -1,111 +1,94 @@
-# Recruiter Workflow Fragmentation — Unified Agentic AI Platform
+# Recruiter Workflow Fragmentation
 
-> A high-performance, unified AI platform that consolidates resume parsing, candidate ranking, stage tracking, meeting scheduling, and templated outreach into an autonomous recruitment system.
-
----
-
-## ⚡ Tech Stack
-
-- **Backend & Web**: Python, Django
-- **Database & ORM**: PostgreSQL, SQLAlchemy
-- **Async Queue & Cache**: Redis, Celery
-- **Infrastructure & Deployment**: Docker, Docker Compose, AWS EC2
-- **AI & NLP**: Local TF-IDF Vector Engine, Ollama / OpenAI LLM APIs
+A unified web platform and background engine built to streamline the hiring process. Instead of jumping between different tools to parse resumes, rank candidates, schedule interviews, and draft emails, this system brings everything together into a single workflow.
 
 ---
 
-## 🚀 Key Highlights & Performance
+## Tech Stack
 
-- **High-Throughput Matching**: Local TF-IDF similarity engine processing **6,000+ candidate-to-job matches/sec** (0.167ms/match).
-- **Sub-60ms Resume Parsing**: Automated text extraction and section segmentation averaging **56.7ms per document** (PDF & DOCX).
-- **Two-Tier Resilient Fallback**: 100% pipeline matching availability by architecting automatic failover from Cloud LLM to local TF-IDF on rate limits or network failures.
-- **Autonomous Agentic Automation**: Natural language task execution, candidate shortlisting, interview question generation, and batch recruiter decision workflows.
-- **Asynchronous Task Queue**: Celery & Redis handling background email delivery, candidate pipeline progression, and batch ranking.
-
----
-
-## 🏗️ Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                 Django Web & REST API Layer                     │
-├─────────────────┬──────────────────────┬────────────────────────┤
-│  Recruiter Web  │   AI Agent Router    │   Pipeline Engine      │
-│  UI Dashboard   │   (Tool-Calling)     │   (Auto-Progression)   │
-├─────────────────┴──────────────────────┴────────────────────────┤
-│             Asynchronous Worker Layer (Celery + Redis)          │
-│       • Batch Decision Outreach  • Heavy Matching & Tasks       │
-├─────────────────────────────────────────────────────────────────┤
-│                     Domain Services Layer                       │
-│  • Resume Parser (PDF/DOCX)      • Local TF-IDF Matcher         │
-│  • LLM Summaries & Questions     • Email & Meeting Scheduler    │
-├─────────────────────────────────────────────────────────────────┤
-│                   Data Layer (SQLAlchemy ORM)                   │
-│             PostgreSQL (Production) / SQLite (Dev)              │
-└─────────────────────────────────────────────────────────────────┘
-```
+- **Web Framework**: Python / Django
+- **Database & ORM**: PostgreSQL / SQLAlchemy
+- **Background Tasks & Queue**: Celery / Redis
+- **Containerization**: Docker & Docker Compose
+- **NLP & AI**: TF-IDF similarity matcher + Ollama / OpenAI API
 
 ---
 
-## 🏁 Quick Start
+## What It Does
 
-### 1. Run with Docker Compose (Recommended)
+1. **Resume Ingestion & Parsing**: Automatically extracts text and parses candidate contact details, skills, education, experience, and projects from PDF and DOCX files.
+2. **Candidate Ranking**: Matches resumes against job descriptions using a fast local TF-IDF similarity algorithm, with support for LLM-based fallback when needed.
+3. **Pipeline & Stage Tracking**: Move applicants through hiring stages (Screening, Interview, Offer, Hired, Rejected) with notes and status tracking.
+4. **Recruiter Batch Decisions**: Accept or reject multiple candidates at once and trigger customized email notifications.
+5. **Interview Prep & Scheduling**: Automatically generate tailored interview questions based on candidate resumes and create meeting calendar invites.
+6. **Background Job Execution**: Uses Celery and Redis to handle email delivery, automated stage progression, and heavy candidate rankings asynchronously.
+
+---
+
+## How to Run the Project
+
+### Option 1: Run with Docker Compose (Recommended)
+
+This brings up PostgreSQL, Redis, the Django server, and the Celery background worker with a single command:
 
 ```bash
-# Build and launch all services (PostgreSQL, Redis, Django, Celery)
 docker-compose up --build
 ```
-Access the application at **http://localhost:8000**.
+
+Once running, open your browser and go to **http://localhost:8000**.
 
 ---
 
-### 2. Run Locally
+### Option 2: Run Locally (Without Docker)
 
-#### Prerequisites
-- Python 3.11+
-- Virtualenv
-
+#### 1. Setup Virtual Environment
 ```bash
-# 1. Clone & create virtual environment
+# Create and activate environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate   # On Windows: venv\Scripts\activate
 
-# 2. Install dependencies
+# Install packages
 pip install -r requirements.txt
+```
 
-# 3. Configure environment
+#### 2. Configure Environment
+```bash
 cp env.example .env
+```
+*(By default, local setup uses SQLite and local processing if PostgreSQL/Redis are not running).*
 
-# 4. Start the Django web server
+#### 3. Start the Application
+```bash
+# Run Django web server
 python manage.py runserver 0.0.0.0:8000
-# or: python app.py
 
-# 5. Start Celery worker (optional, in separate terminal)
+# (Optional) In another terminal, run Celery worker
 celery -A recruiter_project worker -l info
 ```
 
+Visit **http://localhost:8000** to view the recruiter dashboard.
+
 ---
 
-## 📡 Essential API Reference
+## Core API Endpoints
 
-| Method | Endpoint | Description |
+| Endpoint | Method | Purpose |
 |---|---|---|
-| `GET` | `/health` | Service health and environment status |
-| `POST` | `/api/agent/execute` | Execute natural language recruitment instruction |
-| `POST` | `/api/agent/pipeline/{jd_id}` | Trigger automated end-to-end recruitment workflow |
-| `GET` / `POST` | `/api/jds/` | List or create Job Descriptions |
-| `POST` | `/api/resumes/upload` | Upload & parse resume (PDF/DOCX) |
-| `GET` / `POST` | `/api/candidates/` | List, filter, or evaluate candidates |
-| `POST` | `/api/candidates/batch-decision` | Recruiter batch accept/reject & email trigger |
-| `POST` | `/api/candidates/rank/{jd_id}` | Re-compute candidate similarity ranking |
-| `POST` | `/api/interview/questions/{id}` | Generate tailored interview questions |
-| `POST` | `/api/email/send` | Send automated recruiter email |
+| `/health` | `GET` | Health check & service status |
+| `/api/jds/` | `GET` / `POST` | List or create job descriptions |
+| `/api/resumes/upload` | `POST` | Upload and parse a resume file |
+| `/api/candidates/` | `GET` | View candidates and filter by job role |
+| `/api/candidates/rank/{jd_id}` | `POST` | Calculate similarity rankings for a job |
+| `/api/candidates/batch-decision` | `POST` | Batch accept/reject candidates and send emails |
+| `/api/interview/questions/{id}` | `POST` | Generate candidate-specific interview questions |
+| `/api/email/send` | `POST` | Send candidate outreach emails |
+| `/api/agent/execute` | `POST` | Run natural language instructions via AI agent |
 
 ---
 
-## 🧪 Verification & Tests
+## Running Tests
 
-Run the full automated test suite:
+To verify that all endpoints, parsers, and database operations work properly:
 
 ```bash
 python -m pytest tests/ -v
@@ -113,6 +96,6 @@ python -m pytest tests/ -v
 
 ---
 
-## 📜 License
+## License
 
-MIT License.
+MIT
