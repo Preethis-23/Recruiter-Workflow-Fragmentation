@@ -9,6 +9,12 @@ __pycache__/
 
 # Database
 *.db
+*.sqlite3
+db.sqlite3
+
+# Static & Media
+staticfiles/
+uploads/
 
 # IDE
 .vscode/
@@ -23,4 +29,3 @@ Thumbs.db
 
 # Misc
 .sixth/
-uploads/
