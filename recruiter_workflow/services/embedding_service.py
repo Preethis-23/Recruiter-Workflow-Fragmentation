@@ -51,9 +51,6 @@ def compute_similarity_tfidf(text1: str, text2: str) -> float:
 
 def compute_similarity_ollama(text1: str, text2: str) -> float:
     """Compute similarity using Ollama embeddings."""
-    # Llama 3.2 and other text models do not support the /api/embed endpoint natively
-    # without specific configuration, causing severe timeouts.
-    # Fallback to TF-IDF immediately if not a known embedding model.
     if settings.OLLAMA_MODEL not in ["nomic-embed-text", "mxbai-embed-large", "all-minilm"]:
         return compute_similarity_tfidf(text1, text2)
         
@@ -103,13 +100,17 @@ def compute_similarity_openai(text1: str, text2: str) -> float:
 def compute_similarity(text1: str, text2: str) -> float:
     """Compute similarity between two texts using the configured provider.
     
-    Falls back gracefully: Ollama/OpenAI → TF-IDF.
+    Falls back gracefully: Cloud OpenAI / Ollama → local TF-IDF matcher.
     """
     provider = settings.LLM_PROVIDER.lower()
     
-    if provider == "ollama":
-        return compute_similarity_ollama(text1, text2)
-    elif provider == "openai" and settings.OPENAI_API_KEY:
-        return compute_similarity_openai(text1, text2)
-    else:
+    try:
+        if provider == "ollama":
+            return compute_similarity_ollama(text1, text2)
+        elif provider == "openai" and settings.OPENAI_API_KEY:
+            return compute_similarity_openai(text1, text2)
+        else:
+            return compute_similarity_tfidf(text1, text2)
+    except Exception as e:
+        logger.warning(f"Cloud/Provider embedding error ({e}), engaging local TF-IDF fallback.")
         return compute_similarity_tfidf(text1, text2)

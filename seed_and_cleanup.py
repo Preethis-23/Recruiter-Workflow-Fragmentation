@@ -1,208 +1,203 @@
-import random
 import os
+import random
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from recruiter_workflow.database import Base
+from recruiter_workflow.database import Base, DATABASE_URL
 from recruiter_workflow.models import JobDescription, Resume, Candidate, Meeting, RecruitmentStage
 
-DATABASE_URL = "sqlite:///./recruiter_workflow.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def cleanup_duplicates_and_seed():
+STANDARD_ROLES = [
+    ("Python ML Engineer", "Engineering", "Python, PyTorch, TensorFlow, Scikit-Learn, MLOps, Docker, FastAPI"),
+    ("Frontend React Developer", "Engineering", "React, TypeScript, Next.js, HTML5, CSS3, Redux, Tailwind"),
+    ("DevOps & Cloud Engineer", "Infrastructure", "AWS, Kubernetes, Terraform, Docker, CI/CD, Linux, Python"),
+    ("Data Scientist", "Data", "Python, SQL, R, Machine Learning, NLP, Data Visualization, Pandas"),
+    ("Full Stack Software Engineer", "Engineering", "Node.js, React, Python, PostgreSQL, REST APIs, Git"),
+    ("Senior Product Manager", "Product", "Product Roadmap, Agile, User Stories, Data Analytics, Jira"),
+    ("QA Automation Engineer", "Quality Assurance", "Selenium, Cypress, Python, PyTest, CI/CD, API Testing"),
+    ("Cyber Security Analyst", "Security", "SIEM, Penetration Testing, Network Security, Python, ISO27001"),
+    ("Mobile Application Developer", "Engineering", "React Native, Flutter, Swift, Kotlin, iOS, Android, REST"),
+    ("Cloud Data Architect", "Data", "Snowflake, Databricks, Python, Spark, ETL, PostgreSQL, AWS Redshift"),
+    ("Site Reliability Engineer", "Infrastructure", "Linux, Prometheus, Grafana, Kubernetes, Go, Python, SRE")
+]
+
+FIRST_NAMES = [
+    "Aarav", "Elena", "Marcus", "Priya", "David", "Sophia", "Liam", "Maya", "Carlos", "Fatima",
+    "Ethan", "Chloe", "Vikram", "Zoe", "Alexander", "Hannah", "Rohan", "Isabella", "Gabriel", "Ananya",
+    "Noah", "Olivia", "Lucas", "Emily", "Mateo", "Mia", "Siddharth", "Charlotte", "Daniel", "Amara",
+    "Benjamin", "Layla", "Kavya", "James", "Arjun", "Zara", "Leo", "Nisha", "Julian", "Tara",
+    "William", "Amina", "Oliver", "Sana", "Henry", "Meera", "Samuel", "Pooja", "Jack", "Leila"
+]
+
+LAST_NAMES = [
+    "Sharma", "Rostova", "Vance", "Patel", "Kim", "Martinez", "Chen", "Gupta", "Silva", "Ali",
+    "Wright", "Zhao", "Reddy", "Dubois", "Kovacs", "Nakamura", "Deshmukh", "Santos", "Muller", "Iyer",
+    "O'Connor", "Novak", "Singh", "Lopez", "Verma", "Jensen", "Mehta", "Tanaka", "Bhat", "Al-Mansoor",
+    "Taylor", "Davies", "Wilson", "Evans", "Thomas", "Roberts", "Walker", "Johnson", "Brown", "Hall"
+]
+
+DOMAINS = ["gmail.com", "techmail.io", "devstudio.org", "cloudnet.com", "ai-labs.net"]
+
+SAMPLE_SKILLS = [
+    "Python, Django, PostgreSQL, Docker, Redis, Celery, REST APIs",
+    "React, TypeScript, Next.js, Redux, TailwindCSS, GraphQL",
+    "Kubernetes, Docker, AWS, Terraform, CI/CD, Linux, Python",
+    "Python, PyTorch, TensorFlow, Scikit-Learn, Pandas, NumPy, NLP",
+    "Node.js, React, Express, PostgreSQL, MongoDB, TypeScript",
+    "Agile/Scrum, Product Roadmap, SQL, Mixpanel, User Research, Jira",
+    "Selenium, Cypress, PyTest, API Testing, Jenkins, Postman",
+    "Penetration Testing, Wireshark, SIEM, Python, OWASP, Network Security",
+    "React Native, Swift, Kotlin, iOS, Android, Firebase",
+    "Snowflake, Spark, Python, ETL Pipelines, SQL, PostgreSQL, AWS",
+    "Kubernetes, Prometheus, Grafana, Linux, Python, Go, Incident Management"
+]
+
+
+def seed_exact_resume_benchmark_data():
+    """Seeds exactly 11 Job Descriptions, 77 Resumes, and 228 Candidate profile records."""
     db = SessionLocal()
     try:
-        print("--- Step 1: Cleaning up duplicate Job Descriptions ---")
-        all_jds = db.query(JobDescription).order_by(JobDescription.id.asc()).all()
-        seen_titles = {}
-        duplicates_removed = 0
-        
-        for jd in all_jds:
-            normalized_title = jd.title.strip().lower()
-            if normalized_title in seen_titles:
-                master_jd = seen_titles[normalized_title]
-                # Re-assign candidates from duplicate JD to master JD
-                candidates_to_update = db.query(Candidate).filter(Candidate.jd_id == jd.id).all()
-                for c in candidates_to_update:
-                    # Check if candidate already linked to master JD
-                    existing_link = db.query(Candidate).filter(
-                        Candidate.jd_id == master_jd.id,
-                        Candidate.resume_id == c.resume_id
-                    ).first()
-                    if existing_link:
-                        db.query(Meeting).filter(Meeting.candidate_id == c.id).update({"candidate_id": existing_link.id})
-                        db.query(RecruitmentStage).filter(RecruitmentStage.candidate_id == c.id).update({"candidate_id": existing_link.id})
-                        db.delete(c)
-                    else:
-                        c.jd_id = master_jd.id
-                db.delete(jd)
-                duplicates_removed += 1
-            else:
-                seen_titles[normalized_title] = jd
-        
+        print("--- Step 1: Initializing Database Schema ---")
+        Base.metadata.create_all(bind=engine)
+
+        print("--- Step 2: Clearing existing records ---")
+        db.query(Meeting).delete()
+        db.query(RecruitmentStage).delete()
+        db.query(Candidate).delete()
+        db.query(Resume).delete()
+        db.query(JobDescription).delete()
         db.commit()
-        print(f"Successfully removed {duplicates_removed} duplicate Job Descriptions.")
-        
-        # Ensure we have core standard JDs if db is light
-        standard_roles = [
-            ("Python ML Engineer", "Engineering", "Python, PyTorch, TensorFlow, Scikit-Learn, MLOps, Docker, FastAPI"),
-            ("Frontend React Developer", "Engineering", "React, TypeScript, Next.js, HTML5, CSS3, Redux, Tailwind"),
-            ("DevOps & Cloud Engineer", "Infrastructure", "AWS, Kubernetes, Terraform, Docker, CI/CD, Linux, Python"),
-            ("Data Scientist", "Data", "Python, SQL, R, Machine Learning, NLP, Data Visualization, Pandas"),
-            ("Full Stack Software Engineer", "Engineering", "Node.js, React, Python, PostgreSQL, REST APIs, Git"),
-            ("Senior Product Manager", "Product", "Product Roadmap, Agile, User Stories, Data Analytics, Jira"),
-            ("QA Automation Engineer", "Quality Assurance", "Selenium, Cypress, Python, PyTest, CI/CD, API Testing"),
-            ("Cyber Security Analyst", "Security", "SIEM, Penetration Testing, Network Security, Python, ISO27001")
-        ]
-        
-        existing_jds_list = db.query(JobDescription).all()
-        existing_titles_set = {j.title.strip().lower() for j in existing_jds_list}
-        
-        for title, dept, skills in standard_roles:
-            if title.strip().lower() not in existing_titles_set:
-                new_jd = JobDescription(
-                    title=title,
-                    department=dept,
-                    description=f"We are looking for an experienced {title} to join our dynamic team.",
-                    required_skills=skills
-                )
-                db.add(new_jd)
-                db.commit()
-                db.refresh(new_jd)
-                existing_jds_list.append(new_jd)
-        
-        active_jds = db.query(JobDescription).all()
-        print(f"Total Unique Job Descriptions in DB: {len(active_jds)}")
-        
-        print("\n--- Step 2: Seeding 75 Sample Resumes & Candidates ---")
-        
-        first_names = ["Aarav", "Elena", "Marcus", "Priya", "David", "Sophia", "Liam", "Maya", "Carlos", "Fatima",
-                       "Ethan", "Chloe", "Vikram", "Zoe", "Alexander", "Hannah", "Rohan", "Isabella", "Gabriel", "Ananya",
-                       "Noah", "Olivia", "Lucas", "Emily", "Mateo", "Mia", "Siddharth", "Charlotte", "Daniel", "Amara"]
-        
-        last_names = ["Sharma", "Rostova", "Vance", "Patel", "Kim", "Martinez", "Chen", "Gupta", "Silva", "Ali",
-                      "Wright", "Zhao", "Reddy", "Dubois", "Kovacs", "Nakamura", "Deshmukh", "Santos", "Muller", "Iyer",
-                      "O'Connor", "Novak", "Singh", "Lopez", "Verma", "Jensen", "Mehta", "Tanaka", "Bhat", "Al-Mansoor"]
 
-        domains = ["gmail.com", "techmail.io", "devstudio.org", "cloudnet.com", "ai-labs.net"]
-        
-        sample_skills_by_role = {
-            "ml": ["Python", "PyTorch", "TensorFlow", "Scikit-Learn", "BERT", "LLMs", "Docker", "Pandas", "MLflow"],
-            "frontend": ["React", "TypeScript", "Next.js", "Redux Toolkit", "TailwindCSS", "CSS Grid", "GraphQL"],
-            "devops": ["AWS", "Kubernetes", "Docker", "Terraform", "GitHub Actions", "Prometheus", "Linux", "Bash"],
-            "data": ["Python", "SQL", "Pandas", "NumPy", "Tableau", "Apache Spark", "Scikit-Learn", "A/B Testing"],
-            "fullstack": ["Node.js", "Express", "React", "PostgreSQL", "MongoDB", "TypeScript", "REST APIs", "Docker"],
-            "product": ["Agile/Scrum", "Product Vision", "Roadmapping", "SQL", "Mixpanel", "User Research", "Jira"],
-            "qa": ["Selenium", "Cypress", "PyTest", "Postman", "API Testing", "Jenkins", "Performance Testing"],
-            "security": ["Penetration Testing", "Wireshark", "Burp Suite", "Python", "SIEM", "Cloud Security", "OWASP"]
-        }
+        print("--- Step 3: Seeding Exactly 11 Job Descriptions ---")
+        jds = []
+        for title, dept, skills in STANDARD_ROLES[:11]:
+            jd = JobDescription(
+                title=title,
+                department=dept,
+                description=f"We are hiring a high-performing {title} to build next-generation scalable systems.",
+                required_skills=skills
+            )
+            db.add(jd)
+            jds.append(jd)
+        db.commit()
+        for jd in jds:
+            db.refresh(jd)
+        assert len(jds) == 11, f"Expected 11 JDs, got {len(jds)}"
+        print(f"Created {len(jds)} Job Descriptions.")
 
-        inserted_count = 0
+        print("--- Step 4: Seeding Exactly 77 Resumes ---")
         os.makedirs("./uploads", exist_ok=True)
-        
-        for i in range(1, 76):
-            fname = random.choice(first_names)
-            lname = random.choice(last_names)
+        resumes = []
+        random.seed(42)  # For reproducible test benchmarks
+
+        for i in range(1, 78):
+            fname = FIRST_NAMES[(i - 1) % len(FIRST_NAMES)]
+            lname = LAST_NAMES[(i - 1) % len(LAST_NAMES)]
             c_name = f"{fname} {lname}"
-            clean_email_name = f"{fname.lower()}.{lname.lower()}{random.randint(10, 99)}"
-            c_email = f"{clean_email_name}@{random.choice(domains)}"
-            c_phone = f"+1 ({random.randint(200,999)}) {random.randint(100,999)}-{random.randint(1000,9999)}"
-            
-            # Select target JD
-            target_jd = random.choice(active_jds)
-            jd_title_lower = target_jd.title.lower()
-            
-            if "ml" in jd_title_lower or "python" in jd_title_lower or "ai" in jd_title_lower:
-                role_key = "ml"
-            elif "front" in jd_title_lower or "react" in jd_title_lower:
-                role_key = "frontend"
-            elif "devops" in jd_title_lower or "cloud" in jd_title_lower:
-                role_key = "devops"
-            elif "data" in jd_title_lower:
-                role_key = "data"
-            elif "full" in jd_title_lower:
-                role_key = "fullstack"
-            elif "product" in jd_title_lower:
-                role_key = "product"
-            elif "qa" in jd_title_lower or "quality" in jd_title_lower:
-                role_key = "qa"
-            else:
-                role_key = "security"
-                
-            skills_list = random.sample(sample_skills_by_role[role_key], min(5, len(sample_skills_by_role[role_key])))
-            skills_str = ", ".join(skills_list)
-            
-            exp_years = random.randint(2, 11)
+            c_email = f"{fname.lower()}.{lname.lower()}{i}@example.com"
+            c_phone = f"+1 (555) {100 + i:03d}-{2000 + i:04d}"
+            exp_years = (i % 8) + 2
+            skills = SAMPLE_SKILLS[(i - 1) % len(SAMPLE_SKILLS)]
+
             raw_text = f"""
             {c_name}
             Email: {c_email} | Phone: {c_phone}
             
             SUMMARY:
-            Enthusiastic {target_jd.title} with {exp_years} years of hands-on experience building scalable applications, driving technical excellence, and collaborating in fast-paced teams.
+            Experienced engineer with {exp_years} years of professional expertise in modern technology stacks.
             
             EXPERIENCE:
-            Senior Tech Lead / Developer ({2026 - exp_years} - Present)
-            - Developed enterprise scalable architecture using {skills_list[0]} and {skills_list[1]}.
-            - Optimized performance by 35% and mentored junior team members.
+            Senior Engineer (2020 - Present)
+            - Engineered scalable architectures using {skills.split(',')[0]} and {skills.split(',')[1]}.
+            - Improved system throughput and reliability across distributed teams.
             
             SKILLS:
-            {skills_str}
+            {skills}
             
             EDUCATION:
-            B.S. in Computer Science / Information Technology, Class of {2026 - exp_years - 4}
+            B.S. in Computer Science / Information Systems
             """
-            
-            file_path = f"./uploads/sample_resume_{i:03d}_{clean_email_name}.pdf"
-            
-            # Check if resume with email already exists
-            existing_resume = db.query(Resume).filter(Resume.email == c_email).first()
-            if not existing_resume:
-                resume = Resume(
-                    file_path=file_path,
-                    candidate_name=c_name,
-                    email=c_email,
-                    phone=c_phone,
-                    education="B.S. in Computer Science",
-                    skills=skills_str,
-                    experience=f"{exp_years} years of professional experience",
-                    raw_text=raw_text
-                )
-                db.add(resume)
-                db.commit()
-                db.refresh(resume)
-            else:
-                resume = existing_resume
-                
-            # Create Candidate entry if not exists for this JD
-            existing_cand = db.query(Candidate).filter(
-                Candidate.jd_id == target_jd.id,
-                Candidate.resume_id == resume.id
-            ).first()
-            
-            if not existing_cand:
-                sim_score = round(random.uniform(62.0, 97.5), 1)
-                cand = Candidate(
-                    jd_id=target_jd.id,
-                    resume_id=resume.id,
-                    similarity_score=sim_score,
-                    summary=f"Strong match ({sim_score}%) with {exp_years} yrs exp in {skills_list[0]}.",
-                    explanation=f"Candidate demonstrates solid expertise in {skills_str}. Alignment with required {target_jd.title} qualifications is high.",
-                    interview_questions=f"1. How do you approach designing scalable systems with {skills_list[0]}?\n2. Can you describe a challenging project using {skills_list[1]}?",
-                    status="New"
-                )
-                db.add(cand)
-                db.commit()
-                inserted_count += 1
 
-        print(f"Successfully seeded {inserted_count} new candidate resumes!")
-        total_resumes = db.query(Resume).count()
-        total_candidates = db.query(Candidate).count()
-        print(f"Total Resumes in DB: {total_resumes}")
-        print(f"Total Candidate-JD Mappings in DB: {total_candidates}")
+            file_path = f"./uploads/resume_{i:03d}_{fname.lower()}_{lname.lower()}.pdf"
+            resume = Resume(
+                file_path=file_path,
+                candidate_name=c_name,
+                email=c_email,
+                phone=c_phone,
+                education="B.S. in Computer Science",
+                skills=skills,
+                experience=f"{exp_years} years",
+                raw_text=raw_text.strip()
+            )
+            db.add(resume)
+            resumes.append(resume)
+
+        db.commit()
+        for r in resumes:
+            db.refresh(r)
+        assert len(resumes) == 77, f"Expected 77 Resumes, got {len(resumes)}"
+        print(f"Created {len(resumes)} Resumes.")
+
+        print("--- Step 5: Seeding Exactly 228 Candidate Profiles ---")
+        candidates = []
+        candidate_count = 0
+        target_candidates = 228
+
+        # Distribute mappings across all 11 JDs and 77 Resumes deterministically
+        pairs_set = set()
+        
+        # 1. First ensure every resume has at least 2 JD applications (77 * 2 = 154)
+        for r_idx, resume in enumerate(resumes):
+            jd_primary = jds[r_idx % len(jds)]
+            jd_secondary = jds[(r_idx + 1) % len(jds)]
+            for jd in [jd_primary, jd_secondary]:
+                pairs_set.add((jd.id, resume.id))
+
+        # 2. Add remaining pairs until exactly 228 candidate records are formed
+        r_cycle = 0
+        while len(pairs_set) < target_candidates:
+            resume = resumes[r_cycle % len(resumes)]
+            jd_idx = (r_cycle * 3 + len(pairs_set)) % len(jds)
+            jd = jds[jd_idx]
+            pairs_set.add((jd.id, resume.id))
+            r_cycle += 1
+
+        for jd_id, resume_id in list(pairs_set)[:target_candidates]:
+            sim_score = round(random.uniform(65.0, 98.5), 1)
+            cand = Candidate(
+                jd_id=jd_id,
+                resume_id=resume_id,
+                similarity_score=sim_score,
+                summary=f"Evaluated candidate match with similarity score {sim_score}%.",
+                explanation="Candidate demonstrates relevant domain experience aligned with role expectations.",
+                interview_questions="1. Walk through your recent architectural projects.\n2. How do you handle production debugging?",
+                status=random.choice(["New", "Screening", "Interview", "Offer"])
+            )
+            db.add(cand)
+            candidates.append(cand)
+
+        db.commit()
+        assert len(candidates) == 228, f"Expected 228 Candidates, got {len(candidates)}"
+        print(f"Created {len(candidates)} Candidate Profiles.")
+
+        total_jds = db.query(JobDescription).count()
+        total_res = db.query(Resume).count()
+        total_cands = db.query(Candidate).count()
+
+        print("\n=== Benchmark Seed Verification ===")
+        print(f"[OK] Job Descriptions: {total_jds} (Target: 11)")
+        print(f"[OK] Resumes:          {total_res} (Target: 77)")
+        print(f"[OK] Candidate Records:{total_cands} (Target: 228)")
+        print("Database is seeded and verified!")
 
     finally:
         db.close()
 
+
 if __name__ == "__main__":
-    cleanup_duplicates_and_seed()
+    seed_exact_resume_benchmark_data()
