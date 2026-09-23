@@ -102,6 +102,11 @@ class CandidateNotesUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class BatchDecisionRequest(BaseModel):
+    jd_id: int
+    selected_candidate_ids: list[int] = []
+
+
 # ─── Recruitment Stage ────────────────────────────────────────────────────────
 
 class RecruitmentStageCreate(BaseModel):

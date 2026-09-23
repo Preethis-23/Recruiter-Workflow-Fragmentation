@@ -125,19 +125,26 @@ def upload_resume_file(
     db.commit()
     db.refresh(resume)
 
-    # If a JD was selected during upload, automatically create the Candidate link
+    # If a JD was selected during upload, automatically create Candidate link and trigger auto-ranking
     if jd_id:
         candidate = Candidate(jd_id=jd_id, resume_id=resume.id, status="New")
         db.add(candidate)
         db.commit()
         db.refresh(candidate)
         
+        # Trigger immediate auto-ranking for this JD
+        from recruiter_workflow.services.ranking_service import rank_resumes_for_jd
+        try:
+            rank_resumes_for_jd(db, jd_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error auto-ranking resumes for JD {jd_id}: {e}", exc_info=True)
+            
         # Trigger autonomous workflow
         from recruiter_workflow.services.pipeline_service import run_candidate_workflow
         try:
             run_candidate_workflow(db, candidate.id)
         except Exception as e:
-            # We catch exceptions to make sure the API response succeeds even if LLM/Google Calendar fails, but log it
             import logging
             logging.getLogger(__name__).error(f"Error running automated workflow for candidate {candidate.id}: {e}", exc_info=True)
 

@@ -84,66 +84,96 @@ def run_candidate_workflow(db: Session, candidate_id: int) -> dict:
     else:
         questions = candidate.interview_questions.split("\n")
         
-    # ─── Step 5: Update Recruitment Stage to Technical Interview ───
-    # We update the stage to Technical Interview and schedule it
-    scheduled_time = datetime.utcnow() + timedelta(days=1, hours=2)  # Scheduled for tomorrow + 2 hours
+    # ─── Step 5: Update Recruitment Stage to Screening ───
+    stage = RecruitmentStage(
+        candidate_id=candidate.id,
+        stage="Screening",
+        notes="Automated screening completed. Ready for interview scheduling."
+    )
+    db.add(stage)
+    candidate.status = "Screening"
+    db.flush()
     
-    # Create the stage in db
+    db.commit()
+    logger.info(f"Candidate processing completed successfully for candidate {candidate_id} (stopped before scheduling)")
+    
+    return {
+        "success": True,
+        "candidate_id": candidate_id,
+        "similarity_score": candidate.similarity_score,
+        "explanation": candidate.explanation,
+        "summary": candidate.summary
+    }
+
+def schedule_and_email_candidate(db: Session, candidate_id: int) -> dict:
+    """Schedule an interview and send outreach email for a candidate."""
+    from recruiter_workflow.models import Meeting
+    from recruiter_workflow.services.email_service import generate_email, send_email_notification
+    from recruiter_workflow.services.calendar_service import create_google_calendar_event
+    from datetime import datetime, timedelta
+    
+    candidate = db.query(Candidate).options(joinedload(Candidate.resume)).filter(Candidate.id == candidate_id).first()
+    if not candidate or not candidate.resume:
+        return {"success": False, "error": "Candidate or resume not found"}
+        
+    jd = db.query(JobDescription).filter(JobDescription.id == candidate.jd_id).first()
+    
+    # Update stage to Technical Interview
+    scheduled_time = datetime.utcnow() + timedelta(days=1, hours=2)
     stage = RecruitmentStage(
         candidate_id=candidate.id,
         stage="Technical Interview",
         scheduled_date=scheduled_time,
-        notes="Automated technical interview scheduled during pipeline run."
+        notes="Automated technical interview scheduled."
     )
     db.add(stage)
     candidate.status = "Interview"
     db.flush()
     
-    # ─── Step 6: Schedule Google Calendar Event & Get Link ───
+    # Schedule Google Calendar Event & Get Link
+    questions = candidate.interview_questions.split("\n") if candidate.interview_questions else []
     logger.info(f"Scheduling calendar event for candidate {candidate_id}")
     meeting_details = create_google_calendar_event(
-        summary=f"Technical Interview: {resume.candidate_name or 'Candidate'} - {jd.title}",
-        attendee_email=resume.email or "candidate@example.com",
+        summary=f"Technical Interview: {candidate.resume.candidate_name or 'Candidate'} - {jd.title if jd else 'Role'}",
+        attendee_email=candidate.resume.email or "candidate@example.com",
         start_time=scheduled_time,
         duration_minutes=30,
-        description=f"Technical Interview for candidate {resume.candidate_name}.\n\nTailored Interview Questions:\n" + "\n".join([f"- {q}" for q in questions])
+        description=f"Technical Interview for candidate {candidate.resume.candidate_name}.\n\nTailored Interview Questions:\n" + "\n".join([f"- {q}" for q in questions])
     )
     
     event_id = meeting_details.get("event_id")
     meeting_link = meeting_details.get("meeting_link")
     
-    # Save calendar / meeting details in Candidate
     candidate.calendar_event_id = event_id
     candidate.meeting_link = meeting_link
     candidate.scheduled_date = scheduled_time
     
-    # Create Meeting model record
     meeting = Meeting(
         candidate_id=candidate.id,
-        title=f"Technical Interview: {resume.candidate_name or 'Candidate'}",
+        title=f"Technical Interview: {candidate.resume.candidate_name or 'Candidate'}",
         meeting_link=meeting_link,
         scheduled_at=scheduled_time,
         duration_minutes=30,
-        attendees=resume.email,
+        attendees=candidate.resume.email,
         notes=f"Auto-generated Google Calendar meeting. Event ID: {event_id}",
         calendar_event_id=event_id
     )
     db.add(meeting)
     db.flush()
     
-    # ─── Step 7: Generate Email Invitation ───
+    # Generate Email Invitation
     logger.info(f"Drafting automated interview email for candidate {candidate_id}")
     email_draft = generate_email(
         candidate_id=candidate.id,
         template_type="interview_scheduling",
-        candidate_name=resume.candidate_name or "Candidate",
-        position=jd.title,
+        candidate_name=candidate.resume.candidate_name or "Candidate",
+        position=jd.title if jd else "Role",
         stage="Technical Interview",
         scheduled_date=scheduled_time.strftime("%Y-%m-%d %H:%M UTC")
     )
     
-    # ─── Step 8: Send Email Automatically ───
-    recipient_email = resume.email or "candidate@example.com"
+    # Send Email Automatically
+    recipient_email = candidate.resume.email or "candidate@example.com"
     send_result = send_email_notification(
         to_email=recipient_email,
         subject=email_draft["subject"],
@@ -159,16 +189,12 @@ def run_candidate_workflow(db: Session, candidate_id: int) -> dict:
         candidate.email_error_reason = send_result.get("error", "Unknown email sending error")
         logger.error(f"Email automation failed for candidate {candidate_id}: {candidate.email_error_reason}")
     
-    # ─── Step 9: Commit ───
     db.commit()
-    logger.info(f"Autonomous workflow completed successfully for candidate {candidate_id}")
+    logger.info(f"Scheduling and emailing completed successfully for candidate {candidate_id}")
     
     return {
         "success": True,
         "candidate_id": candidate_id,
-        "similarity_score": candidate.similarity_score,
-        "explanation": candidate.explanation,
-        "summary": candidate.summary,
         "meeting_link": candidate.meeting_link,
         "calendar_event_id": candidate.calendar_event_id,
         "email_status": candidate.email_status,

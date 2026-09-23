@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Recruiter AI Workspace</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css?v=2.0">
+    <link rel="stylesheet" href="/style.css?v=3.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -109,30 +109,32 @@
 
             <!-- Candidates View -->
             <section id="view-candidates" class="view-section">
-                <header class="section-header">
-                    <h1>Candidate Pipeline</h1>
+                <header class="section-header" style="flex-wrap: wrap; gap: 15px;">
+                    <div>
+                        <h1>Recruiter Hub — Candidate Selection & Auto-Ranking</h1>
+                        <p class="subtitle" style="margin-top: 4px; color: var(--text-muted); font-size: 0.9rem;">
+                            Step 1: Upload resumes by role & candidates auto-sort by AI match score.<br>
+                            Step 2: Check selected candidates, then click <strong>Confirm Selection & Send Emails</strong>.
+                        </p>
+                    </div>
                     <div class="header-actions">
-                        <select id="jd-filter-select" class="glass-input">
+                        <select id="jd-filter-select" class="glass-input" style="min-width: 220px;" onchange="loadCandidates()">
                             <option value="">All Job Descriptions</option>
                         </select>
-                        <button class="btn btn-primary" onclick="triggerRanking()">
-                            <i class="fa-solid fa-ranking-star"></i> Rank Candidates
-                        </button>
-                        <button class="btn btn-secondary" onclick="runFullPipeline()">
-                            <i class="fa-solid fa-rocket"></i> Run Full Pipeline
-                        </button>
                     </div>
                 </header>
                 
-                <!-- Bulk Actions Container -->
-                <div class="bulk-actions-container glass-panel mb-4" style="display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 1rem; flex-wrap: wrap;">
-                    <span id="selected-count" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 600;">0 candidates selected</span>
-                    <div style="display: flex; gap: 10px;">
-                        <button class="btn btn-outline btn-sm" onclick="bulkSendEmail()" id="btn-bulk-email" disabled>
-                            <i class="fa-solid fa-paper-plane"></i> Send Status Emails
-                        </button>
-                        <button class="btn btn-outline btn-sm" onclick="openBulkScheduleModal()" id="btn-bulk-schedule" disabled>
-                            <i class="fa-solid fa-calendar-days"></i> Bulk Schedule Interview
+                <!-- Bulk Decision Action Banner -->
+                <div class="bulk-actions-container glass-panel mb-4" style="display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 1.2rem; flex-wrap: wrap; background: rgba(99, 102, 241, 0.08); border: 1fr solid rgba(99, 102, 241, 0.25);">
+                    <div>
+                        <span id="selected-count" style="font-size: 1rem; color: var(--primary); font-weight: 600;">0 candidates selected</span>
+                        <div style="font-size: 0.825rem; color: var(--text-muted); margin-top: 2px;">
+                            Unselected candidates for the role will automatically receive rejection notices upon confirmation.
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="btn btn-primary btn-lg" onclick="openBatchDecisionModal()" id="btn-confirm-batch" style="box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);">
+                            <i class="fa-solid fa-paper-plane"></i> Confirm Selection & Send Emails
                         </button>
                     </div>
                 </div>
@@ -142,9 +144,10 @@
                         <thead>
                             <tr>
                                 <th style="width: 40px;"><input type="checkbox" id="select-all-candidates" onchange="toggleSelectAllCandidates(this)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);"></th>
-                                <th>Name</th>
+                                <th>Candidate Name</th>
+                                <th>Extracted Email</th>
+                                <th>AI Match Score</th>
                                 <th>Status</th>
-                                <th>AI Score</th>
                                 <th>Notes</th>
                                 <th>Actions</th>
                             </tr>
@@ -456,6 +459,46 @@
         </div>
     </div>
 
-    <script src="app.js?v=2.0"></script>
+    <!-- Batch Decision Confirmation Modal -->
+    <div id="batch-confirm-modal" class="modal-overlay">
+        <div class="modal-content glass-panel" style="max-width: 650px;">
+            <div class="modal-header">
+                <h2><i class="fa-solid fa-paper-plane text-primary"></i> Confirm Recruiter Decision & Batch Emails</h2>
+                <button class="icon-btn close-modal" onclick="closeModals()"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 15px;">
+                    Review your decision summary below. Once confirmed, emails will be dispatched automatically to all candidate mailboxes.
+                </p>
+
+                <div class="glass-panel-inner p-3 mb-3" style="background: rgba(255,255,255,0.03); border-radius: 8px;">
+                    <h4 id="batch-role-title" style="margin-bottom: 10px; color: var(--primary);"><i class="fa-solid fa-briefcase"></i> Role: All Roles</h4>
+                    <div style="display: flex; gap: 15px; margin-bottom: 12px; flex-wrap: wrap;">
+                        <span class="badge badge-success" style="font-size: 0.9rem; padding: 6px 12px;" id="batch-selected-badge">
+                            <i class="fa-solid fa-circle-check"></i> 0 Selected (Next Round / Interview)
+                        </span>
+                        <span class="badge badge-error" style="font-size: 0.9rem; padding: 6px 12px;" id="batch-rejected-badge">
+                            <i class="fa-solid fa-circle-xmark"></i> 0 Remaining (Rejection Notice)
+                        </span>
+                    </div>
+
+                    <div style="max-height: 220px; overflow-y: auto; font-size: 0.85rem; border-top: 1px solid var(--glass-border); padding-top: 10px;" id="batch-candidate-list">
+                        <!-- List of candidates and extracted email addresses -->
+                    </div>
+                </div>
+
+                <div id="batch-status-msg" style="display: none; font-size: 0.9rem; padding: 10px; border-radius: 6px; margin-bottom: 15px;"></div>
+
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModals()">Cancel</button>
+                    <button type="button" id="btn-execute-batch" class="btn btn-primary" onclick="confirmBatchDecision()">
+                        <i class="fa-solid fa-paper-plane"></i> Confirm & Send Mails Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=3.0"></script>
 </body>
 </html>

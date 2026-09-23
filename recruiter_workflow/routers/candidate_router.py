@@ -1,15 +1,18 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from recruiter_workflow.database import get_db
-from recruiter_workflow.models import Candidate, JobDescription, Resume
+from recruiter_workflow.models import Candidate, JobDescription, Resume, RecruitmentStage
 from recruiter_workflow.schemas import (
     CandidateResponse,
     CandidateStatusUpdate,
     CandidateNotesUpdate,
+    BatchDecisionRequest,
 )
 from recruiter_workflow.services.ranking_service import rank_resumes_for_jd, get_ranked_candidates
 from recruiter_workflow.services.llm_service import generate_summary
+from recruiter_workflow.services.email_service import generate_email, send_email_notification
 
 router = APIRouter(prefix="/api/candidates", tags=["Candidates"])
 
@@ -20,7 +23,15 @@ def list_candidates(
     status_filter: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """List candidates, optionally filtered by jd_id and/or status."""
+    """List candidates, optionally filtered by jd_id and/or status. Automatically auto-ranks if missing scores."""
+    if jd_id is not None:
+        unranked = db.query(Candidate).filter(Candidate.jd_id == jd_id, Candidate.similarity_score.is_(None)).count()
+        if unranked > 0:
+            try:
+                rank_resumes_for_jd(db, jd_id)
+            except Exception:
+                pass
+
     query = db.query(Candidate).options(joinedload(Candidate.resume))
     if jd_id is not None:
         query = query.filter(Candidate.jd_id == jd_id)
@@ -73,6 +84,114 @@ def update_candidate_notes(
     db.commit()
     db.refresh(candidate)
     return candidate
+
+
+@router.post("/batch-decision")
+def batch_decision(payload: BatchDecisionRequest, db: Session = Depends(get_db)):
+    """Recruiter Batch Decision:
+    
+    1. Selected candidates: updated to status 'Interview' (Next Round), sent Interview Invitation email.
+    2. Remaining candidates for the role: updated to status 'Rejected', sent Rejection email.
+    """
+    jd = db.query(JobDescription).filter(JobDescription.id == payload.jd_id).first()
+    if not jd:
+        raise HTTPException(status_code=404, detail=f"Job Description #{payload.jd_id} not found")
+
+    candidates = db.query(Candidate).options(joinedload(Candidate.resume)).filter(Candidate.jd_id == payload.jd_id).all()
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No candidates found for this role.")
+
+    selected_ids = set(payload.selected_candidate_ids)
+    results = {
+        "jd_id": payload.jd_id,
+        "role_title": jd.title,
+        "selected_count": 0,
+        "rejected_count": 0,
+        "email_logs": []
+    }
+
+    for candidate in candidates:
+        resume = candidate.resume
+        candidate_name = resume.candidate_name if resume else "Candidate"
+        recipient_email = (resume.email if resume and resume.email else "").strip()
+
+        if candidate.id in selected_ids:
+            # Selected for Next Round / Interview
+            candidate.status = "Interview"
+            results["selected_count"] += 1
+            
+            # Generate email
+            email_draft = generate_email(
+                candidate_id=candidate.id,
+                template_type="interview_scheduling",
+                candidate_name=candidate_name,
+                position=jd.title,
+                stage="Technical Interview",
+                scheduled_date=datetime.utcnow().strftime("%Y-%m-%d")
+            )
+            
+            if recipient_email:
+                send_res = send_email_notification(recipient_email, email_draft["subject"], email_draft["body"])
+                candidate.email_status = "Sent" if send_res.get("success") else "Failed"
+                candidate.email_error_reason = None if send_res.get("success") else send_res.get("error")
+                results["email_logs"].append({
+                    "candidate_id": candidate.id,
+                    "candidate_name": candidate_name,
+                    "email": recipient_email,
+                    "decision": "Selected (Next Round)",
+                    "email_status": candidate.email_status,
+                    "detail": send_res.get("message") or send_res.get("error")
+                })
+            else:
+                candidate.email_status = "Failed"
+                candidate.email_error_reason = "No extracted email address on resume"
+                results["email_logs"].append({
+                    "candidate_id": candidate.id,
+                    "candidate_name": candidate_name,
+                    "email": "None",
+                    "decision": "Selected (Next Round)",
+                    "email_status": "Failed",
+                    "detail": "Missing candidate email address"
+                })
+        else:
+            # Rejected remaining candidate
+            candidate.status = "Rejected"
+            results["rejected_count"] += 1
+
+            # Generate rejection email
+            email_draft = generate_email(
+                candidate_id=candidate.id,
+                template_type="rejection",
+                candidate_name=candidate_name,
+                position=jd.title
+            )
+
+            if recipient_email:
+                send_res = send_email_notification(recipient_email, email_draft["subject"], email_draft["body"])
+                candidate.email_status = "Sent" if send_res.get("success") else "Failed"
+                candidate.email_error_reason = None if send_res.get("success") else send_res.get("error")
+                results["email_logs"].append({
+                    "candidate_id": candidate.id,
+                    "candidate_name": candidate_name,
+                    "email": recipient_email,
+                    "decision": "Rejected",
+                    "email_status": candidate.email_status,
+                    "detail": send_res.get("message") or send_res.get("error")
+                })
+            else:
+                candidate.email_status = "Failed"
+                candidate.email_error_reason = "No extracted email address on resume"
+                results["email_logs"].append({
+                    "candidate_id": candidate.id,
+                    "candidate_name": candidate_name,
+                    "email": "None",
+                    "decision": "Rejected",
+                    "email_status": "Failed",
+                    "detail": "Missing candidate email address"
+                })
+
+    db.commit()
+    return results
 
 
 @router.post("/rank/{jd_id}")

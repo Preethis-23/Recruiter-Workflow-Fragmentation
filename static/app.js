@@ -215,8 +215,14 @@ async function uploadFile(file) {
         if (res.ok) {
             const data = await res.json();
             uploadStatus.style.color = 'var(--success)';
-            uploadStatus.textContent = '✓ Uploaded: ' + (data.candidate_name || file.name);
+            uploadStatus.textContent = '✓ Uploaded & Auto-Ranked by AI score: ' + (data.candidate_name || file.name);
+            
+            // Auto sync filter dropdown to target JD and refresh candidate view
+            if (jdSelect.value) {
+                jdFilterSelect.value = jdSelect.value;
+            }
             loadResumes();
+            loadCandidates();
         } else {
             const err = await res.json();
             uploadStatus.style.color = 'var(--danger)';
@@ -279,8 +285,8 @@ async function loadResumes() {
             const row = document.createElement('tr');
             const parsedDate = r.parsed_at ? new Date(r.parsed_at).toLocaleDateString() : 'N/A';
             const rolesHtml = r.applied_roles && r.applied_roles.length > 0 
-                ? r.applied_roles.map(role => `<span class="badge" style="background: var(--primary); font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; margin-right: 4px;">${escapeHtml(role)}</span>`).join('')
-                : '<span style="color: var(--text-muted); font-size: 0.85rem;">General Pool</span>';
+                ? r.applied_roles.map(role => `<span class="badge" style="background: var(--primary); color: #ffffff; font-weight: 600; box-shadow: 0 2px 4px rgba(0,0,0,0.2); font-size: 0.75rem; padding: 4px 8px; border-radius: 6px; margin-right: 4px;">${escapeHtml(role)}</span>`).join('')
+                : '<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">General Pool</span>';
 
             row.innerHTML = '<td><strong>' + escapeHtml(r.candidate_name || 'Unknown') + '</strong></td>' +
                 '<td>' + escapeHtml(r.email || 'N/A') + '</td>' +
@@ -367,14 +373,16 @@ function onCandidateCheckboxChange(id, cb) {
 
 function updateBulkActionsState() {
     const countSpan = document.getElementById('selected-count');
-    countSpan.textContent = selectedCandidates.size + ' candidates selected';
+    if (countSpan) {
+        countSpan.textContent = selectedCandidates.size + ' candidates selected';
+        countSpan.style.color = 'var(--primary)';
+    }
     
-    const emailBtn = document.getElementById('btn-bulk-email');
-    const scheduleBtn = document.getElementById('btn-bulk-schedule');
-    
+    const confirmBtn = document.getElementById('btn-confirm-batch');
     const hasSelection = selectedCandidates.size > 0;
-    emailBtn.disabled = !hasSelection;
-    scheduleBtn.disabled = !hasSelection;
+    if (confirmBtn) {
+        confirmBtn.disabled = !hasSelection;
+    }
 }
 
 async function loadCandidates() {
@@ -392,14 +400,19 @@ async function loadCandidates() {
         
         candidatesTable.innerHTML = '';
         if (cands.length === 0) {
-            candidatesTable.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No candidates yet. Upload resumes and rank them against a JD.</td></tr>';
+            candidatesTable.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No candidates yet. Select a role and upload resumes to auto-rank them.</td></tr>';
             return;
         }
         
         cands.forEach(c => {
-            const score = c.similarity_score ? (c.similarity_score * 100).toFixed(1) + '%' : 'N/A';
+            let scoreVal = c.similarity_score;
+            if (scoreVal !== null && scoreVal <= 1.0) {
+                scoreVal = scoreVal * 100;
+            }
+            const scoreRaw = scoreVal !== null ? scoreVal.toFixed(1) : null;
+            const scoreDisplay = scoreRaw ? scoreRaw + '%' : 'N/A';
             const name = c.resume ? (c.resume.candidate_name || 'Unknown') : 'Unknown';
-            const roleTitle = c.job_description ? c.job_description.title : 'JD #' + c.jd_id;
+            const email = c.resume ? (c.resume.email || 'No email extracted') : 'No email';
             
             let badgeClass = 'status-new';
             const st = c.status || 'New';
@@ -408,13 +421,37 @@ async function loadCandidates() {
             if (st.includes('Offer')) badgeClass = 'status-offer';
             if (st.includes('Reject')) badgeClass = 'status-rejected';
 
+            // Score badge styling
+            let scoreBg = 'rgba(255,255,255,0.1)';
+            let scoreColor = '#a0aec0';
+            if (scoreRaw) {
+                const sNum = parseFloat(scoreRaw);
+                if (sNum >= 75) { scoreBg = 'rgba(16, 185, 129, 0.2)'; scoreColor = '#10b981'; }
+                else if (sNum >= 50) { scoreBg = 'rgba(59, 130, 246, 0.2)'; scoreColor = '#3b82f6'; }
+                else { scoreBg = 'rgba(245, 158, 11, 0.2)'; scoreColor = '#f59e0b'; }
+            }
+
+            const isSelected = selectedCandidates.has(c.id);
+
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td><input type="checkbox" class="candidate-checkbox" data-id="${c.id}" onchange="onCandidateCheckboxChange(${c.id}, this)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);"></td>
+                <td><input type="checkbox" class="candidate-checkbox" data-id="${c.id}" ${isSelected ? 'checked' : ''} onchange="onCandidateCheckboxChange(${c.id}, this)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);"></td>
                 <td><strong>${escapeHtml(name)}</strong></td>
-                <td><span class="status-badge ${badgeClass}">${escapeHtml(st)}</span></td>
+                <td><span style="font-size: 0.85rem; color: var(--text-muted); font-family: monospace;"><i class="fa-regular fa-envelope"></i> ${escapeHtml(email)}</span></td>
+                <td><span style="display: inline-block; padding: 4px 10px; border-radius: 12px; font-weight: 700; font-size: 0.85rem; background: ${scoreBg}; color: ${scoreColor};">${scoreDisplay}</span></td>
+                <td>
+                    <div class="status-badge ${badgeClass}" style="padding: 0;">
+                        <select onchange="updateCandidateStatus(${c.id}, this.value)" style="appearance: none; -webkit-appearance: none; background: transparent; border: none; color: inherit; font-weight: inherit; padding: 4px 10px; cursor: pointer; outline: none; width: 100%;">
+                            <option value="New" ${st === 'New' ? 'selected' : ''} style="color: #0f172a;">New</option>
+                            <option value="Screening" ${st === 'Screening' ? 'selected' : ''} style="color: #0f172a;">Screening</option>
+                            <option value="Interview" ${st === 'Interview' ? 'selected' : ''} style="color: #0f172a;">Interview</option>
+                            <option value="Offer" ${st === 'Offer' ? 'selected' : ''} style="color: #0f172a;">Offer</option>
+                            <option value="Rejected" ${st === 'Rejected' ? 'selected' : ''} style="color: #0f172a;">Rejected</option>
+                        </select>
+                    </div>
+                </td>
                 <td><button class="btn btn-sm btn-outline" onclick="openNotesModal(${c.id}, \`${escapeHtml(c.notes || '').replace(/`/g, '&#96;')}\`)"><i class="fa-solid fa-pen-to-square"></i> Notes</button></td>
-                <td><button class="btn btn-sm btn-outline" onclick="viewCandidate(${c.id})">Profile</button></td>
+                <td><button class="btn btn-sm btn-outline" onclick="viewCandidate(${c.id})"><i class="fa-solid fa-user"></i> Profile</button></td>
             `;
             candidatesTable.appendChild(row);
         });
@@ -423,12 +460,150 @@ async function loadCandidates() {
     }
 }
 
-let currentNotesCandidateId = null;
+async function updateCandidateStatus(candidateId, newStatus) {
+    try {
+        const res = await fetch(API_BASE + '/candidates/' + candidateId + '/status', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus })
+        });
+        if (res.ok) {
+            loadCandidates(); // Refresh to update badge color and data
+        } else {
+            alert('Failed to update candidate status.');
+        }
+    } catch (e) {
+        console.error('Error updating status:', e);
+        alert('Network error updating status.');
+    }
+}
 
-function openNotesModal(id, currentNotes) {
-    currentNotesCandidateId = id;
-    document.getElementById('candidate-notes-text').value = currentNotes || '';
-    document.getElementById('notes-modal').classList.add('active');
+// ─── Batch Decision Confirmation & Processing ──────────────────────────────
+async function openBatchDecisionModal() {
+    const jdId = jdFilterSelect.value;
+    if (!jdId) {
+        alert('Please select a specific Job Description / Role from the top filter dropdown first to perform a batch decision.');
+        return;
+    }
+
+    try {
+        const res = await fetch(API_BASE + '/candidates/?jd_id=' + jdId);
+        const cands = await res.json();
+        
+        if (cands.length === 0) {
+            alert('No candidates found for this role. Upload resumes first.');
+            return;
+        }
+
+        const roleTitle = cands[0].job_description ? cands[0].job_description.title : ('Job Description #' + jdId);
+        document.getElementById('batch-role-title').innerHTML = '<i class="fa-solid fa-briefcase"></i> Role: ' + escapeHtml(roleTitle);
+
+        const selectedCands = cands.filter(c => selectedCandidates.has(c.id));
+        const rejectedCands = cands.filter(c => !selectedCandidates.has(c.id));
+
+        document.getElementById('batch-selected-badge').innerHTML = `<i class="fa-solid fa-circle-check"></i> ${selectedCands.length} Selected (Next Round / Interview)`;
+        document.getElementById('batch-rejected-badge').innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${rejectedCands.length} Remaining (Rejection Notice)`;
+
+        const listContainer = document.getElementById('batch-candidate-list');
+        listContainer.innerHTML = '';
+
+        if (selectedCands.length > 0) {
+            const hSel = document.createElement('div');
+            hSel.style.fontWeight = '600';
+            hSel.style.color = 'var(--success-color)';
+            hSel.style.marginTop = '6px';
+            hSel.innerHTML = 'Selected Candidates (Will receive Interview Invitation):';
+            listContainer.appendChild(hSel);
+
+            selectedCands.forEach(c => {
+                const name = c.resume ? (c.resume.candidate_name || 'Candidate') : 'Candidate';
+                const email = c.resume ? (c.resume.email || 'No email extracted') : 'No email';
+                const item = document.createElement('div');
+                item.style.padding = '4px 8px';
+                item.style.color = 'var(--text-main)';
+                item.innerHTML = `• <strong>${escapeHtml(name)}</strong> — <span style="font-family: monospace; color: var(--text-muted);">${escapeHtml(email)}</span>`;
+                listContainer.appendChild(item);
+            });
+        }
+
+        if (rejectedCands.length > 0) {
+            const hRej = document.createElement('div');
+            hRej.style.fontWeight = '600';
+            hRej.style.color = 'var(--error-color)';
+            hRej.style.marginTop = '12px';
+            hRej.innerHTML = 'Remaining Candidates (Will receive Rejection Notice):';
+            listContainer.appendChild(hRej);
+
+            rejectedCands.forEach(c => {
+                const name = c.resume ? (c.resume.candidate_name || 'Candidate') : 'Candidate';
+                const email = c.resume ? (c.resume.email || 'No email extracted') : 'No email';
+                const item = document.createElement('div');
+                item.style.padding = '4px 8px';
+                item.style.color = 'var(--text-main)';
+                item.innerHTML = `• <strong>${escapeHtml(name)}</strong> — <span style="font-family: monospace; color: var(--text-muted);">${escapeHtml(email)}</span>`;
+                listContainer.appendChild(item);
+            });
+        }
+
+        document.getElementById('batch-status-msg').style.display = 'none';
+        document.getElementById('batch-confirm-modal').classList.add('active');
+    } catch (e) {
+        console.error('Error preparing batch decision modal:', e);
+        alert('Failed to prepare batch decision summary.');
+    }
+}
+
+async function confirmBatchDecision() {
+    const jdId = jdFilterSelect.value;
+    if (!jdId) return;
+
+    const btn = document.getElementById('btn-execute-batch');
+    const msg = document.getElementById('batch-status-msg');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Dispatched Batch Emails...';
+
+    msg.style.display = 'block';
+    msg.style.background = 'rgba(59, 130, 246, 0.2)';
+    msg.style.color = '#60a5fa';
+    msg.innerHTML = '<i class="fa-solid fa-paper-plane fa-spin"></i> Sending Next Round and Rejection emails to all extracted candidate mailboxes...';
+
+    try {
+        const payload = {
+            jd_id: parseInt(jdId),
+            selected_candidate_ids: Array.from(selectedCandidates)
+        };
+
+        const res = await fetch(API_BASE + '/candidates/batch-decision', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            msg.style.background = 'rgba(16, 185, 129, 0.2)';
+            msg.style.color = '#34d399';
+            msg.innerHTML = `✅ <strong>Recruiter Decision Executed!</strong> Sent ${data.selected_count} Next Round emails and ${data.rejected_count} Rejection emails!`;
+            
+            setTimeout(() => {
+                closeModals();
+                loadCandidates();
+            }, 2000);
+        } else {
+            msg.style.background = 'rgba(239, 68, 68, 0.2)';
+            msg.style.color = '#f87171';
+            msg.innerHTML = '❌ ' + (data.detail || 'Failed to execute batch decision.');
+        }
+    } catch (e) {
+        console.error('Error confirming batch decision:', e);
+        msg.style.background = 'rgba(239, 68, 68, 0.2)';
+        msg.style.color = '#f87171';
+        msg.innerHTML = '❌ Server error while sending emails.';
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Confirm & Send Mails Now';
 }
 
 async function saveNotesFromModal() {
@@ -794,7 +969,13 @@ async function sendDraftedEmail() {
         });
         const data = await res.json();
         if (res.ok && data.success) {
-            alert('Email sent successfully!');
+            let msg = 'Email processed!';
+            if (data.message && data.message.includes('[SIMULATED]')) {
+                msg += '\n\n⚠️ NOTE: SMTP settings (SMTP_HOST/USERNAME/PASSWORD) are not set in your .env file, so this email was SIMULATED.\nTo send actual emails to real inboxes, configure your SMTP credentials in .env.';
+            } else {
+                msg = 'Email sent successfully to inbox!';
+            }
+            alert(msg);
             viewCandidate(currentCandidateId);
         } else {
             alert('Failed to send email: ' + (data.error || 'Unknown error'));
@@ -997,28 +1178,59 @@ async function sendAgentMessage() {
         // Build response HTML
         let html = '';
         
-        // Summary text
+        // Render Summary text with rich Markdown (including HTML tables)
         const summaryText = data.summary || 'Task completed.';
-        html += escapeHtml(summaryText).replace(/\n/g, '<br>');
+        html += renderMarkdown(summaryText);
+        
+        // Check if any candidate tool was executed (hire_for_role, get_ranked_candidates, list_candidates, rank_candidates_for_jd)
+        let relevantJdId = null;
+        let fetchedCandidates = null;
+        
+        if (data.actions && data.actions.length > 0) {
+            for (const a of data.actions) {
+                if (a.tool === 'hire_for_role' && a.result && a.result.jd_id) {
+                    relevantJdId = a.result.jd_id;
+                } else if (a.arguments && a.arguments.jd_id) {
+                    relevantJdId = a.arguments.jd_id;
+                }
+            }
+        }
+        
+        // If candidate-related task was performed or requested, fetch candidates and render interactive Selection Card
+        const isCandidateQuery = /shortlist|list|rank|candidate|pick|hire|recruit|process/i.test(text);
+        if (isCandidateQuery || relevantJdId) {
+            try {
+                const cUrl = relevantJdId ? (API_BASE + '/candidates/?jd_id=' + relevantJdId) : (API_BASE + '/candidates/');
+                const cRes = await fetch(cUrl);
+                const candidates = await cRes.json();
+                
+                if (candidates && candidates.length > 0) {
+                    // Display top 5 or filtered candidates
+                    const displayCandidates = candidates.slice(0, 5);
+                    html += createChatCandidateCard(displayCandidates, relevantJdId ? `Role #${relevantJdId}` : null);
+                }
+            } catch (err) {
+                console.error('Failed to attach candidate decision card to chat', err);
+            }
+        }
         
         // Tool actions trace
         if (data.actions && data.actions.length > 0) {
-            html += '<div class="tool-trace" style="margin-top: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--glass-border);">';
+            html += '<div class="tool-trace" style="margin-top: 15px; padding: 15px; background: rgba(0,0,0,0.03); border-radius: 8px; border: 1px solid var(--glass-border);">';
             html += '<h4 style="margin: 0 0 10px 0; font-size: 0.9rem; color: var(--text-muted);"><i class="fa-solid fa-list-check"></i> Execution Log (' + data.actions.length + ' steps):</h4>';
             html += '<ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">';
             data.actions.forEach((a, i) => {
                 const success = a.result && a.result.success;
                 const icon = success ? '<i class="fa-solid fa-circle-check" style="color: var(--success-color);"></i>' : '<i class="fa-solid fa-circle-xmark" style="color: var(--error-color);"></i>';
                 
-                // Try to extract a clean summary from the result, fallback to a brief stringified version
                 let detail = '';
                 if (a.result && a.result.detail) detail = a.result.detail;
                 else if (a.result && a.result.note) detail = a.result.note;
                 else if (a.result && a.result.error) detail = a.result.error;
                 else detail = Object.keys(a.result).filter(k => k !== 'success').map(k => `${k}: ${a.result[k]}`).join(', ').substring(0, 100);
                 
-                html += `<li style="font-size: 0.85rem; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border-left: 3px solid ${success ? 'var(--success-color)' : 'var(--error-color)'};">`;
-                html += `  <div style="display: flex; align-items: center; gap: 8px; font-weight: 500;">${icon} Step ${i+1}: <code>${escapeHtml(a.tool)}</code></div>`;
+                html += `<li style="font-size: 0.85rem; padding: 8px 12px; background: #ffffff; border-radius: 6px; border-left: 3px solid ${success ? 'var(--success-color)' : 'var(--error-color)'}; border: 1px solid var(--glass-border);">`;
+                html += `  <div style="display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--text-main);">${icon} Step ${i+1}: <code>${escapeHtml(a.tool)}</code></div>`;
                 html += `  <div style="margin-top: 4px; color: var(--text-muted); padding-left: 22px;">${escapeHtml(detail)}</div>`;
                 html += `</li>`;
             });
@@ -1036,6 +1248,273 @@ async function sendAgentMessage() {
         appendSystemMessage('⚠️ Error communicating with agent. Make sure the server is running.');
         console.error('Agent error:', e);
     }
+}
+
+// ─── Markdown Renderer ───────────────────────────────────────────────────────
+function renderMarkdown(text) {
+    if (!text) return '';
+    
+    // First, process markdown tables
+    const tableRegex = /((?:\|[^\n]+\|\r?\n)+)/g;
+    text = text.replace(tableRegex, (match) => {
+        const lines = match.trim().split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length < 2) return match;
+        
+        const headerLine = lines[0];
+        const dataLines = lines.slice(1).filter(l => !l.includes('---'));
+        
+        const parseRow = row => row.split('|').slice(1, -1).map(c => c.trim());
+        
+        const headers = parseRow(headerLine);
+        let tableHtml = '<div style="overflow-x:auto;"><table class="chat-table"><thead><tr>';
+        headers.forEach(h => {
+            tableHtml += `<th>${renderMarkdownInline(h)}</th>`;
+        });
+        tableHtml += '</tr></thead><tbody>';
+        
+        dataLines.forEach(line => {
+            const cells = parseRow(line);
+            tableHtml += '<tr>';
+            cells.forEach(c => {
+                tableHtml += `<td>${renderMarkdownInline(c)}</td>`;
+            });
+            tableHtml += '</tr>';
+        });
+        tableHtml += '</tbody></table></div>';
+        return tableHtml;
+    });
+    
+    // Process line-based elements
+    const lines = text.split('\n');
+    let out = [];
+    let inList = false;
+    
+    lines.forEach(line => {
+        if (line.includes('<div') || line.includes('<table')) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(line);
+            return;
+        }
+        
+        if (line.startsWith('### ')) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<h3 style="margin: 10px 0 4px 0; color: var(--primary); font-size: 1rem;">${renderMarkdownInline(line.slice(4))}</h3>`);
+        } else if (line.startsWith('## ')) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<h2 style="margin: 12px 0 6px 0; color: var(--primary); font-size: 1.1rem;">${renderMarkdownInline(line.slice(3))}</h2>`);
+        } else if (line.startsWith('# ')) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push(`<h1 style="margin: 14px 0 8px 0; color: var(--primary); font-size: 1.2rem;">${renderMarkdownInline(line.slice(2))}</h1>`);
+        } else if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+            if (!inList) { out.push('<ul style="margin: 6px 0; padding-left: 20px;">'); inList = true; }
+            out.push(`<li>${renderMarkdownInline(line.trim().slice(2))}</li>`);
+        } else {
+            if (inList) { out.push('</ul>'); inList = false; }
+            if (line.trim()) {
+                out.push(`<p style="margin: 4px 0;">${renderMarkdownInline(line)}</p>`);
+            }
+        }
+    });
+    
+    if (inList) out.push('</ul>');
+    return out.join('');
+}
+
+function renderMarkdownInline(str) {
+    if (!str) return '';
+    return str
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code style="background: rgba(99, 102, 241, 0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.85em;">$1</code>');
+}
+
+// ─── Interactive Chat Candidate Decision Cards ──────────────────────────────
+let chatCardCounter = 0;
+
+function createChatCandidateCard(candidates, jdTitle) {
+    chatCardCounter++;
+    const cardId = 'chat-card-' + chatCardCounter;
+    
+    let cardHtml = `
+    <div class="chat-candidate-card" id="${cardId}">
+        <h4><i class="fa-solid fa-user-check"></i> Candidate Selection & Decision Control ${jdTitle ? '(' + escapeHtml(jdTitle) + ')' : ''}</h4>
+        <div style="font-size: 0.825rem; color: var(--text-muted); margin-bottom: 10px;">Select candidates below and pick an action to execute:</div>
+        
+        <div style="overflow-x: auto;">
+            <table class="chat-table" style="margin: 0;">
+                <thead>
+                    <tr>
+                        <th style="width: 30px;"><input type="checkbox" onchange="toggleChatCardSelectAll('${cardId}', this.checked)" checked style="cursor: pointer;"></th>
+                        <th>Candidate Name</th>
+                        <th>Email</th>
+                        <th>Match Score</th>
+                        <th>Current Status</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+                
+    candidates.forEach(c => {
+        let scoreVal = c.similarity_score;
+        if (scoreVal !== null && scoreVal <= 1.0) scoreVal = scoreVal * 100;
+        const scoreDisplay = scoreVal !== null ? scoreVal.toFixed(1) + '%' : 'N/A';
+        const name = c.candidate_name || (c.resume ? c.resume.candidate_name : null) || 'Unknown Candidate';
+        const email = c.email || (c.resume ? c.resume.email : null) || 'No Email';
+        const st = c.status || 'New';
+        
+        cardHtml += `
+            <tr>
+                <td><input type="checkbox" class="chat-cand-cb" data-id="${c.id}" data-name="${escapeHtml(name)}" data-email="${escapeHtml(email)}" checked style="cursor: pointer;"></td>
+                <td><strong>${escapeHtml(name)}</strong></td>
+                <td><span style="font-family: monospace; font-size: 0.85rem; color: var(--text-muted);">${escapeHtml(email)}</span></td>
+                <td><span style="font-weight: 700; color: var(--primary);">${scoreDisplay}</span></td>
+                <td><span class="status-badge status-${st.toLowerCase()}">${escapeHtml(st)}</span></td>
+            </tr>`;
+    });
+    
+    cardHtml += `
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="chat-card-actions">
+            <label style="font-size: 0.85rem; font-weight: 600; color: var(--text-main);">Recruiter Action:</label>
+            <select class="glass-input chat-card-action-select" style="min-width: 220px; font-size: 0.85rem; padding: 6px 12px; background: #fff;">
+                <option value="schedule_and_email">📅 Schedule Technical Interview & Send Invite Email</option>
+                <option value="send_rejection">❌ Send Rejection Email</option>
+                <option value="send_offer">🎉 Send Job Offer Email</option>
+                <option value="status_screening">🔍 Move to Screening</option>
+                <option value="status_interview">💼 Move to Interview Stage</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="executeChatCardAction('${cardId}')" style="box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);">
+                <i class="fa-solid fa-paper-plane"></i> Execute Action
+            </button>
+        </div>
+        <div class="chat-card-status-msg" style="display: none; margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem;"></div>
+    </div>`;
+    
+    return cardHtml;
+}
+
+function toggleChatCardSelectAll(cardId, isChecked) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    card.querySelectorAll('.chat-cand-cb').forEach(cb => cb.checked = isChecked);
+}
+
+async function executeChatCardAction(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    
+    const checkboxes = Array.from(card.querySelectorAll('.chat-cand-cb:checked'));
+    if (checkboxes.length === 0) {
+        alert('Please select at least one candidate from the list.');
+        return;
+    }
+    
+    const actionSelect = card.querySelector('.chat-card-action-select');
+    const action = actionSelect.value;
+    const actionText = actionSelect.options[actionSelect.selectedIndex].text;
+    
+    const statusMsg = card.querySelector('.chat-card-status-msg');
+    const btn = card.querySelector('button');
+    const originalBtnHtml = btn.innerHTML;
+    
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Executing...';
+    
+    statusMsg.style.display = 'block';
+    statusMsg.style.background = 'rgba(59, 130, 246, 0.15)';
+    statusMsg.style.color = 'var(--primary)';
+    statusMsg.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin"></i> Processing ${actionText} for ${checkboxes.length} candidate(s)...`;
+    
+    const selectedIds = checkboxes.map(cb => parseInt(cb.dataset.id));
+    const selectedNames = checkboxes.map(cb => cb.dataset.name).join(', ');
+    
+    let successCount = 0;
+    let failCount = 0;
+    let feedback = '';
+    
+    try {
+        if (action === 'schedule_and_email') {
+            for (const cid of selectedIds) {
+                await fetch(API_BASE + '/candidates/' + cid + '/status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'Interview' })
+                });
+                const emailRes = await fetch(API_BASE + '/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ candidate_id: cid, template_type: 'interview_scheduling' })
+                });
+                const emailData = await emailRes.json();
+                if (emailRes.ok && emailData.success) successCount++;
+                else failCount++;
+            }
+            feedback = `Scheduled Technical Interview & Dispatched Invites to ${successCount} candidate(s) (${selectedNames}).`;
+        } else if (action === 'send_rejection') {
+            for (const cid of selectedIds) {
+                await fetch(API_BASE + '/candidates/' + cid + '/status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'Rejected' })
+                });
+                const emailRes = await fetch(API_BASE + '/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template_type: 'rejection', candidate_id: cid })
+                });
+                if (emailRes.ok) successCount++;
+                else failCount++;
+            }
+            feedback = `Sent Rejection notices and updated status to Rejected for ${successCount} candidate(s) (${selectedNames}).`;
+        } else if (action === 'send_offer') {
+            for (const cid of selectedIds) {
+                await fetch(API_BASE + '/candidates/' + cid + '/status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'Offer' })
+                });
+                const emailRes = await fetch(API_BASE + '/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ candidate_id: cid, template_type: 'offer' })
+                });
+                if (emailRes.ok) successCount++;
+                else failCount++;
+            }
+            feedback = `Sent Job Offer emails and updated status to Offer for ${successCount} candidate(s) (${selectedNames}).`;
+        } else if (action === 'status_screening' || action === 'status_interview') {
+            const targetStatus = action === 'status_screening' ? 'Screening' : 'Interview';
+            for (const cid of selectedIds) {
+                const res = await fetch(API_BASE + '/candidates/' + cid + '/status', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: targetStatus })
+                });
+                if (res.ok) successCount++;
+                else failCount++;
+            }
+            feedback = `Updated pipeline status to '${targetStatus}' for ${successCount} candidate(s) (${selectedNames}).`;
+        }
+        
+        statusMsg.style.background = 'rgba(16, 185, 129, 0.15)';
+        statusMsg.style.color = 'var(--success-color)';
+        statusMsg.innerHTML = `✅ <strong>Operation Completed!</strong> ${feedback}`;
+        
+        appendSystemMessage(`✅ <strong>Recruiter Action Executed Automatically!</strong><br>${feedback}`);
+        
+        loadCandidates();
+    } catch (e) {
+        console.error('Error executing chat card action:', e);
+        statusMsg.style.background = 'rgba(239, 68, 68, 0.15)';
+        statusMsg.style.color = 'var(--error-color)';
+        statusMsg.innerHTML = `❌ Failed to execute action: ${e.message}`;
+    }
+    
+    btn.disabled = false;
+    btn.innerHTML = originalBtnHtml;
 }
 
 function appendSystemMessage(html, isRaw) {

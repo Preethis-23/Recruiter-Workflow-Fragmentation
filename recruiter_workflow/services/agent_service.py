@@ -106,6 +106,24 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "schedule_and_email_candidates",
+            "description": "Schedule Google Calendar technical interviews and send automated email invitations to a list of candidate IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "List of candidate IDs to schedule and email"
+                    }
+                },
+                "required": ["candidate_ids"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_ranked_candidates",
             "description": "Get the ranked list of candidates for a job description",
             "parameters": {
@@ -262,6 +280,10 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
     
     try:
         if tool_name == "create_job_description":
+            title = arguments.get("title", "")
+            existing = db.query(JobDescription).filter(JobDescription.title.ilike(title)).first() if title else None
+            if existing:
+                return {"success": True, "jd_id": existing.id, "title": existing.title, "reused": True}
             jd = JobDescription(**arguments)
             db.add(jd)
             db.commit()
@@ -474,6 +496,15 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
         
         elif tool_name == "hire_for_role":
             return _execute_hire_workflow(arguments, db)
+            
+        elif tool_name == "schedule_and_email_candidates":
+            candidate_ids = arguments.get("candidate_ids", [])
+            from recruiter_workflow.services.pipeline_service import schedule_and_email_candidate
+            results = []
+            for cid in candidate_ids:
+                res = schedule_and_email_candidate(db, cid)
+                results.append(res)
+            return {"success": True, "results": results}
         
         else:
             return {"success": False, "error": f"Unknown tool: {tool_name}"}
@@ -489,12 +520,14 @@ SYSTEM_PROMPT = """You are an autonomous AI recruitment agent. You execute compl
 
 CRITICAL RULES:
 1. When someone says "hire", "recruit", "find candidates for", "I need a", or describes ANY role to fill → ALWAYS use the `hire_for_role` tool. This is your PRIMARY tool.
-2. When asked to "process a candidate" or "run pipeline" for a specific candidate ID → use `process_candidate`.
-3. NEVER ask for clarification. Make reasonable assumptions and execute.
-4. Chain multiple tools autonomously if needed.
+2. The `hire_for_role` tool will short-list candidates and prepare summaries. IT WILL NOT SCHEDULE OR SEND EMAILS. You MUST display the shortlisted candidates to the user and explicitly ASK FOR CONFIRMATION via chat ("Should I go ahead and schedule interviews and send outreach emails to these candidates?").
+3. ONLY AFTER the user confirms via chat, you will use the `schedule_and_email_candidates` tool.
+4. When asked to "process a candidate" or "run pipeline" for a specific candidate ID → use `process_candidate`.
+5. Chain multiple tools autonomously if needed, except for scheduling/emailing which requires explicit chat confirmation.
 
 Your capabilities:
-- `hire_for_role` — FULL autonomous workflow: create JD → search resumes → rank → summarize → interview questions → schedule → send emails
+- `hire_for_role` — Autonomous workflow: create JD → search resumes → rank → summarize → interview questions (STOPS HERE)
+- `schedule_and_email_candidates` — Schedules calendar invites and sends emails (REQUIRES CHAT CONFIRMATION)
 - `process_candidate` — Process a single candidate through the full pipeline
 - `create_job_description` — Create a new job description
 - `rank_candidates_for_jd` — Rank all resumes against a JD
@@ -692,15 +725,37 @@ def _generate_fallback_response(instruction: str, db: Session) -> str:
         else:
             results.append("No resumes found. Upload and parse one first.")
     
-    if any(kw in lower for kw in ["list candidate", "show candidate", "all candidate"]):
-        candidates = db.query(Candidate).options(joinedload(Candidate.resume)).order_by(Candidate.created_at.desc()).all()
-        if candidates:
-            results.append(f"Found {len(candidates)} candidate(s):")
-            for c in candidates:
-                name = c.resume.candidate_name if c.resume else "Unknown"
-                results.append(f"  • [ID:{c.id}] {name} — Status: {c.status}, Score: {c.similarity_score or 'N/A'}")
+    if any(kw in lower for kw in ["sorted candidate", "rank candidate", "list candidate", "show candidate", "all candidate", "top candidate"]):
+        # Check if a specific JD or role is mentioned
+        jds = db.query(JobDescription).all()
+        target_jd = None
+        for jd in jds:
+            if jd.title.lower() in lower or str(jd.id) in lower:
+                target_jd = jd
+                break
+
+        if target_jd:
+            # Auto-rank if needed
+            rank_resumes_for_jd(db, target_jd.id)
+            candidates = db.query(Candidate).options(joinedload(Candidate.resume)).filter(Candidate.jd_id == target_jd.id).order_by(Candidate.similarity_score.desc().nulls_last()).all()
+            results.append(f"🏆 Sorted Candidates for Role: '{target_jd.title}' (JD #{target_jd.id})")
+            results.append(f"")
+            for idx, c in enumerate(candidates, 1):
+                name = c.resume.candidate_name if c.resume else "Unknown Candidate"
+                email = c.resume.email if (c.resume and c.resume.email) else "No email"
+                score_pct = int((c.similarity_score or 0) * 100)
+                results.append(f"  #{idx} [ID:{c.id}] {name} ({email}) — Match Score: {score_pct}% | Status: {c.status}")
         else:
-            results.append("No candidates found. Rank resumes against a JD first.")
+            candidates = db.query(Candidate).options(joinedload(Candidate.resume)).order_by(Candidate.similarity_score.desc().nulls_last()).all()
+            if candidates:
+                results.append(f"Found {len(candidates)} candidate(s) sorted by AI similarity score:")
+                for c in candidates:
+                    name = c.resume.candidate_name if c.resume else "Unknown Candidate"
+                    email = c.resume.email if (c.resume and c.resume.email) else "No email"
+                    score_pct = int((c.similarity_score or 0) * 100)
+                    results.append(f"  • [ID:{c.id}] {name} ({email}) — Match Score: {score_pct}% | Status: {c.status}")
+            else:
+                results.append("No candidates found. Upload resumes and assign to a role first.")
     
     if results:
         return "\n".join(results)
@@ -709,10 +764,9 @@ def _generate_fallback_response(instruction: str, db: Session) -> str:
         "I understood your instruction but couldn't determine the specific tools to call. "
         "Try being more specific, for example:\n"
         "  • 'Hire a Python ML Engineer'\n"
-        "  • 'Recruit a Data Scientist'\n"
+        "  • 'Show sorted candidates for Python ML Engineer'\n"
         "  • 'Rank all resumes against job description ID 1'\n"
         "  • 'Generate interview questions for candidate ID 3'\n"
-        "  • 'Send an interview scheduling email for candidate ID 2'\n"
         "  • 'Show me all candidates with status Interview'"
     )
 
@@ -816,23 +870,29 @@ def _execute_hire_workflow(arguments: dict, db: Session) -> dict:
         "processed_count": 0
     }
     
-    # 1. Create JD
+    # 1. Create or Reuse JD
     try:
-        desc_prompt = f"Write a professional 2-paragraph job description for a {role_title} in {dept}. Required skills: {req_skills}."
-        description = _call_llm("You are an expert technical recruiter.", desc_prompt, max_tokens=300) or f"Job Description for {role_title}"
-        
-        jd = JobDescription(
-            title=role_title,
-            department=dept,
-            description=description,
-            required_skills=req_skills
-        )
-        db.add(jd)
-        db.commit()
-        db.refresh(jd)
-        jd_id = jd.id
-        result["jd_id"] = jd_id
-        result["steps"].append({"step": "Create Job Description", "status": "success", "detail": f"Created JD #{jd_id} '{role_title}'"})
+        existing_jd = db.query(JobDescription).filter(JobDescription.title.ilike(role_title)).first()
+        if existing_jd:
+            jd_id = existing_jd.id
+            result["jd_id"] = jd_id
+            result["steps"].append({"step": "Job Description", "status": "success", "detail": f"Reused existing JD #{jd_id} '{existing_jd.title}'"})
+        else:
+            desc_prompt = f"Write a professional 2-paragraph job description for a {role_title} in {dept}. Required skills: {req_skills}."
+            description = _call_llm("You are an expert technical recruiter.", desc_prompt, max_tokens=300) or f"Job Description for {role_title}"
+            
+            jd = JobDescription(
+                title=role_title,
+                department=dept,
+                description=description,
+                required_skills=req_skills
+            )
+            db.add(jd)
+            db.commit()
+            db.refresh(jd)
+            jd_id = jd.id
+            result["jd_id"] = jd_id
+            result["steps"].append({"step": "Create Job Description", "status": "success", "detail": f"Created JD #{jd_id} '{role_title}'"})
     except Exception as e:
         result["success"] = False
         result["error"] = f"Failed to create JD: {e}"
@@ -873,7 +933,7 @@ def _execute_hire_workflow(arguments: dict, db: Session) -> dict:
             run_candidate_workflow(db, c.id)
             result["processed_count"] += 1
             
-        result["steps"].append({"step": "Candidate Processing", "status": "success", "detail": f"Automated workflow completed for top {result['processed_count']} candidates (summaries, questions, schedule, email)."})
+        result["steps"].append({"step": "Candidate Processing", "status": "success", "detail": f"Shortlisted {result['processed_count']} candidates (summaries & questions generated, status set to Screening)."})
     except Exception as e:
         result["success"] = False
         result["error"] = f"Failed to process candidates: {e}"
