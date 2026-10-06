@@ -10,11 +10,12 @@ from recruiter_workflow.services.email_service import generate_email, send_email
 
 logger = logging.getLogger(__name__)
 
+
 def run_candidate_workflow(db: Session, candidate_id: int) -> dict:
-    """Run the entire autonomous recruitment workflow for a candidate.
+    """Run the autonomous screening workflow for a candidate.
     
     Processes the candidate through ranking, match explanation, summary, 
-    interview questions, pipeline tracking, calendar scheduling, and automated emailing.
+    interview questions, and screening stage tracking.
     """
     logger.info(f"Triggering automated workflow for candidate ID {candidate_id}")
     
@@ -95,7 +96,7 @@ def run_candidate_workflow(db: Session, candidate_id: int) -> dict:
     db.flush()
     
     db.commit()
-    logger.info(f"Candidate processing completed successfully for candidate {candidate_id} (stopped before scheduling)")
+    logger.info(f"Candidate processing completed successfully for candidate {candidate_id}")
     
     return {
         "success": True,
@@ -105,18 +106,21 @@ def run_candidate_workflow(db: Session, candidate_id: int) -> dict:
         "summary": candidate.summary
     }
 
+
 def schedule_and_email_candidate(db: Session, candidate_id: int) -> dict:
-    """Schedule an interview and send outreach email for a candidate."""
-    from recruiter_workflow.models import Meeting
-    from recruiter_workflow.services.email_service import generate_email, send_email_notification
-    from recruiter_workflow.services.calendar_service import create_google_calendar_event
-    from datetime import datetime, timedelta
-    
-    candidate = db.query(Candidate).options(joinedload(Candidate.resume)).filter(Candidate.id == candidate_id).first()
+    """Schedule an interview and send outreach email for a selected candidate."""
+    candidate = db.query(Candidate).options(
+        joinedload(Candidate.resume),
+        joinedload(Candidate.job_description)
+    ).filter(Candidate.id == candidate_id).first()
+
     if not candidate or not candidate.resume:
-        return {"success": False, "error": "Candidate or resume not found"}
+        return {"success": False, "error": f"Candidate or resume not found for ID {candidate_id}"}
         
-    jd = db.query(JobDescription).filter(JobDescription.id == candidate.jd_id).first()
+    jd = candidate.job_description or db.query(JobDescription).filter(JobDescription.id == candidate.jd_id).first()
+    role_title = jd.title if jd else "Open Position"
+    candidate_name = candidate.resume.candidate_name or "Candidate"
+    recipient_email = (candidate.resume.email or "").strip()
     
     # Update stage to Technical Interview
     scheduled_time = datetime.utcnow() + timedelta(days=1, hours=2)
@@ -134,11 +138,11 @@ def schedule_and_email_candidate(db: Session, candidate_id: int) -> dict:
     questions = candidate.interview_questions.split("\n") if candidate.interview_questions else []
     logger.info(f"Scheduling calendar event for candidate {candidate_id}")
     meeting_details = create_google_calendar_event(
-        summary=f"Technical Interview: {candidate.resume.candidate_name or 'Candidate'} - {jd.title if jd else 'Role'}",
-        attendee_email=candidate.resume.email or "candidate@example.com",
+        summary=f"Technical Interview: {candidate_name} - {role_title}",
+        attendee_email=recipient_email or "candidate@example.com",
         start_time=scheduled_time,
-        duration_minutes=30,
-        description=f"Technical Interview for candidate {candidate.resume.candidate_name}.\n\nTailored Interview Questions:\n" + "\n".join([f"- {q}" for q in questions])
+        duration_minutes=45,
+        description=f"Technical Interview for candidate {candidate_name}.\n\nTailored Interview Questions:\n" + "\n".join([f"- {q}" for q in questions])
     )
     
     event_id = meeting_details.get("event_id")
@@ -150,32 +154,31 @@ def schedule_and_email_candidate(db: Session, candidate_id: int) -> dict:
     
     meeting = Meeting(
         candidate_id=candidate.id,
-        title=f"Technical Interview: {candidate.resume.candidate_name or 'Candidate'}",
+        title=f"Technical Interview: {candidate_name}",
         meeting_link=meeting_link,
         scheduled_at=scheduled_time,
-        duration_minutes=30,
-        attendees=candidate.resume.email,
+        duration_minutes=45,
+        attendees=recipient_email or "candidate@example.com",
         notes=f"Auto-generated Google Calendar meeting. Event ID: {event_id}",
-        calendar_event_id=event_id
     )
     db.add(meeting)
     db.flush()
     
-    # Generate Email Invitation
+    # Generate Interview Invitation Email
     logger.info(f"Drafting automated interview email for candidate {candidate_id}")
     email_draft = generate_email(
         candidate_id=candidate.id,
         template_type="interview_scheduling",
-        candidate_name=candidate.resume.candidate_name or "Candidate",
-        position=jd.title if jd else "Role",
+        candidate_name=candidate_name,
+        position=role_title,
         stage="Technical Interview",
         scheduled_date=scheduled_time.strftime("%Y-%m-%d %H:%M UTC")
     )
     
     # Send Email Automatically
-    recipient_email = candidate.resume.email or "candidate@example.com"
+    target_email = recipient_email or f"{candidate_name.lower().replace(' ', '.')}@example.com"
     send_result = send_email_notification(
-        to_email=recipient_email,
+        to_email=target_email,
         subject=email_draft["subject"],
         body=email_draft["body"]
     )
@@ -183,20 +186,121 @@ def schedule_and_email_candidate(db: Session, candidate_id: int) -> dict:
     if send_result.get("success"):
         candidate.email_status = "Sent"
         candidate.email_error_reason = None
-        logger.info(f"Interview invitation email sent to {recipient_email}")
+        logger.info(f"Interview invitation email sent to {target_email}")
     else:
         candidate.email_status = "Failed"
         candidate.email_error_reason = send_result.get("error", "Unknown email sending error")
         logger.error(f"Email automation failed for candidate {candidate_id}: {candidate.email_error_reason}")
     
     db.commit()
-    logger.info(f"Scheduling and emailing completed successfully for candidate {candidate_id}")
+    logger.info(f"Scheduling and emailing completed for candidate {candidate_id}")
     
     return {
         "success": True,
         "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "decision": "Selected (Next Round / Interview)",
         "meeting_link": candidate.meeting_link,
         "calendar_event_id": candidate.calendar_event_id,
         "email_status": candidate.email_status,
         "email_error_reason": candidate.email_error_reason
     }
+
+
+def reject_and_email_candidate(db: Session, candidate_id: int) -> dict:
+    """Update status to Rejected and send polite rejection email to candidate."""
+    candidate = db.query(Candidate).options(
+        joinedload(Candidate.resume),
+        joinedload(Candidate.job_description)
+    ).filter(Candidate.id == candidate_id).first()
+
+    if not candidate or not candidate.resume:
+        return {"success": False, "error": f"Candidate or resume not found for ID {candidate_id}"}
+        
+    jd = candidate.job_description or db.query(JobDescription).filter(JobDescription.id == candidate.jd_id).first()
+    role_title = jd.title if jd else "Open Position"
+    candidate_name = candidate.resume.candidate_name or "Candidate"
+    recipient_email = (candidate.resume.email or "").strip()
+    
+    # Update stage to Rejected
+    stage = RecruitmentStage(
+        candidate_id=candidate.id,
+        stage="Rejected",
+        notes="Application decision: candidate not moved to next round."
+    )
+    db.add(stage)
+    candidate.status = "Rejected"
+    db.flush()
+    
+    # Generate Rejection Email
+    logger.info(f"Drafting automated rejection email for candidate {candidate_id}")
+    email_draft = generate_email(
+        candidate_id=candidate.id,
+        template_type="rejection",
+        candidate_name=candidate_name,
+        position=role_title,
+    )
+    
+    # Send Email Automatically
+    target_email = recipient_email or f"{candidate_name.lower().replace(' ', '.')}@example.com"
+    send_result = send_email_notification(
+        to_email=target_email,
+        subject=email_draft["subject"],
+        body=email_draft["body"]
+    )
+    
+    if send_result.get("success"):
+        candidate.email_status = "Sent"
+        candidate.email_error_reason = None
+        logger.info(f"Rejection email sent to {target_email}")
+    else:
+        candidate.email_status = "Failed"
+        candidate.email_error_reason = send_result.get("error", "Unknown email sending error")
+        logger.error(f"Rejection email failed for candidate {candidate_id}: {candidate.email_error_reason}")
+        
+    db.commit()
+    
+    return {
+        "success": True,
+        "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "decision": "Rejected",
+        "email_status": candidate.email_status,
+        "email_error_reason": candidate.email_error_reason
+    }
+
+
+def batch_update_candidates_with_emails(db: Session, jd_id: int, selected_candidate_ids: list[int]) -> dict:
+    """Recruiter Batch Decision:
+    - Selected candidate IDs -> status 'Interview', scheduled Google Meet, and sent Interview Invite email.
+    - All remaining candidates for this role -> status 'Rejected', and sent polite Rejection email.
+    """
+    jd = db.query(JobDescription).filter(JobDescription.id == jd_id).first()
+    if not jd:
+        return {"success": False, "error": f"Job Description #{jd_id} not found"}
+
+    candidates = db.query(Candidate).filter(Candidate.jd_id == jd_id).all()
+    if not candidates:
+        return {"success": False, "error": "No candidates found for this role."}
+
+    selected_set = set(selected_candidate_ids)
+    results = {
+        "success": True,
+        "jd_id": jd_id,
+        "role_title": jd.title,
+        "selected_count": 0,
+        "rejected_count": 0,
+        "email_logs": []
+    }
+
+    for c in candidates:
+        if c.id in selected_set:
+            res = schedule_and_email_candidate(db, c.id)
+            results["selected_count"] += 1
+        else:
+            res = reject_and_email_candidate(db, c.id)
+            results["rejected_count"] += 1
+            
+        results["email_logs"].append(res)
+
+    return results

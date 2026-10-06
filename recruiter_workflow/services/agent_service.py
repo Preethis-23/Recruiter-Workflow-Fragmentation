@@ -253,6 +253,25 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "batch_decision_on_candidates",
+            "description": "Recruiter batch decision: update shortlisted candidates to Interview (schedules meeting & sends interview invite email) and remaining unselected candidates to Rejected (sends rejection notification email).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "jd_id": {"type": "integer", "description": "Job description ID"},
+                    "selected_candidate_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "List of shortlisted candidate IDs to advance to Interview"
+                    }
+                },
+                "required": ["jd_id", "selected_candidate_ids"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "hire_for_role",
             "description": "Execute a COMPLETE autonomous hiring workflow from scratch. Creates a job description, searches all existing resumes in the database, ranks candidates by AI similarity, generates summaries and interview questions for top candidates, schedules interviews, and sends emails. Use this when the user says 'hire', 'recruit', 'find candidates for', or describes a role to fill.",
             "parameters": {
@@ -440,9 +459,16 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
             candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
             if not candidate:
                 return {"success": False, "error": f"Candidate {candidate_id} not found"}
-            candidate.status = new_status
-            db.commit()
-            return {"success": True, "candidate_id": candidate_id, "new_status": new_status}
+            
+            from recruiter_workflow.services.pipeline_service import schedule_and_email_candidate, reject_and_email_candidate
+            if new_status in ("Interview", "Technical Interview"):
+                return schedule_and_email_candidate(db, candidate_id)
+            elif new_status == "Rejected":
+                return reject_and_email_candidate(db, candidate_id)
+            else:
+                candidate.status = new_status
+                db.commit()
+                return {"success": True, "candidate_id": candidate_id, "new_status": new_status}
         
         elif tool_name == "create_recruitment_stage":
             candidate_id = arguments["candidate_id"]
@@ -505,6 +531,12 @@ def _execute_tool(tool_name: str, arguments: dict, db: Session) -> dict:
                 res = schedule_and_email_candidate(db, cid)
                 results.append(res)
             return {"success": True, "results": results}
+
+        elif tool_name == "batch_decision_on_candidates":
+            jd_id = arguments["jd_id"]
+            selected_ids = arguments.get("selected_candidate_ids", [])
+            from recruiter_workflow.services.pipeline_service import batch_update_candidates_with_emails
+            return batch_update_candidates_with_emails(db, jd_id, selected_ids)
         
         else:
             return {"success": False, "error": f"Unknown tool: {tool_name}"}
